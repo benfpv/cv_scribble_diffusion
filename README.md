@@ -1,6 +1,8 @@
 # cv_scribble_diffusion
 cv_scribble_diffusion opens a drawing window using OpenCV(2), allowing you to sketch with your mouse. Your scribble serves as a mask input for image generation (e.g., SD1.5), which runs asynchronously to generate an image. The result appears in real time as a background behind your drawing, ideally creating a continuous loop of visual inspiration.
 
+![cv_scribble_diffusion_demo](https://github.com/user-attachments/assets/a32a683a-5139-4949-90e5-e7ec20cef680)
+
 This is partly inspired by already existing similar projects, for example (not necessarily all inclusive):
 - krita-ai-diffusion (https://github.com/Acly/krita-ai-diffusion/releases/tag/v1.9.0)
 
