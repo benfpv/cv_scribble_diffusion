@@ -4,8 +4,6 @@ cv_scribble_diffusion opens a drawing window using OpenCV(2), allowing you to sk
 This is partly inspired by already existing similar projects, for example (not necessarily all inclusive):
 - krita-ai-diffusion (https://github.com/Acly/krita-ai-diffusion/releases/tag/v1.9.0)
 
-The reason I decided to use Python and its packages for this is to open up the possibility of using it with and alongside various python functions with ease.
-
 Models used:
 - stable-diffusion-v1-5
 - sd-controlnet-scribble
@@ -18,7 +16,7 @@ Models used:
 
 # Requirements
 1. Python 3.12.10 (may also work on other versions)
-2. Python packages: numpy, cv2 (opencv-python), pillow, diffusers, torch, threading
+2. Python packages: numpy, cv2 (opencv-python), pillow, diffusers, torch
 3. stable-diffusion-v1-5 (this is an image generation model)
 4. sd-controlnet-scribble (this is a 'scribble->image' controlnet for the stable-diffusion-v1-5 image generation model)
 - Note: If you wish to use a different configuration (e.g., stable-diffusion-v1-5 only, other image generation models with/without other controlnets), you will likely need to update 'main.py' to use the 'diffusers' library appropriately for your specific use case.
@@ -38,6 +36,9 @@ Models used:
 - Left: Reduce brush size
 - Right: Increase brush size
 - Esc: Exit app
+
+# Known Issues
+- Seems like some frames occasionally fail to present/update after running the pipe(). Need to investigate.
 
 # Known Limitations & Future Directions
 - Reduce power draw: Consider using smaller model? Reduce frequency of image generation? Option to use NPU?
