@@ -1,0 +1,30 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+dist/
+build/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Model weights (too large for git)
+stable-diffusion-v1-5/
+sd-controlnet-scribble/
+
+# HuggingFace cache (auto-downloaded models e.g. TAESD)
+.cache/
+
+# Saved images
+saved_image_*.png
+
+# IDE / OS
+.vscode/
+.idea/
+*.DS_Store
+Thumbs.db
