@@ -1,6 +1,6 @@
 """Model loading and inference for ControlNet-guided Stable Diffusion inpainting."""
 
-import numpy as np
+import time
 import torch
 from PIL import Image
 from diffusers import (
@@ -11,6 +11,10 @@ from diffusers import (
 )
 
 from config import AppConfig
+from runtime_logging import get_logger
+
+
+logger = get_logger(__name__)
 
 
 class DiffusionPipeline:
@@ -21,15 +25,15 @@ class DiffusionPipeline:
 
         # Detect GPU
         if torch.cuda.is_available() and cfg.model.use_gpu:
-            print("CUDA is available.")
-            print(f"GPU Name: {torch.cuda.get_device_name(0)}")
+            logger.info("CUDA is available")
+            logger.info("GPU Name: %s", torch.cuda.get_device_name(0))
             torch.cuda.empty_cache()
             self._use_gpu = True
         else:
             if not torch.cuda.is_available():
-                print("CUDA is not available. Running on CPU.")
+                logger.warning("CUDA is not available; running on CPU")
             self._use_gpu = False
-        print(f"Use GPU?: {self._use_gpu}")
+        logger.info("Use GPU: %s", self._use_gpu)
 
         # ControlNet
         controlnet = ControlNetModel.from_pretrained(
@@ -57,6 +61,7 @@ class DiffusionPipeline:
         if self._use_gpu:
             self._taesd.to("cuda")
         self._taesd.eval()
+        logger.info("Diffusion pipeline initialized")
 
     # -- public API -----------------------------------------------------------
 
@@ -82,8 +87,22 @@ class DiffusionPipeline:
         step_callback=None,
     ) -> Image.Image:
         """Run ControlNet-guided inpainting and return the generated PIL image."""
-        return self._pipe(
-            prompt,
+        start_t = time.time()
+        logger.info(
+            "Starting inpaint: steps=%s size=%sx%s",
+            num_inference_steps,
+            width,
+            height,
+        )
+
+        def on_step_end(pipe, step_index, timestep, callback_kwargs):
+            latents = callback_kwargs.get("latents")
+            if step_callback is not None and latents is not None:
+                step_callback(step_index, num_inference_steps, latents)
+            return callback_kwargs
+
+        kwargs = dict(
+            prompt=prompt,
             image=init_image,
             mask_image=mask_image,
             control_image=control_image,
@@ -92,6 +111,25 @@ class DiffusionPipeline:
             controlnet_conditioning_scale=self.cfg.inference.controlnet_conditioning_scale,
             width=width,
             height=height,
-            callback=step_callback,
-            callback_steps=1,
-        ).images[0]
+        )
+
+        if step_callback is not None:
+            kwargs["callback_on_step_end"] = on_step_end
+            kwargs["callback_on_step_end_tensor_inputs"] = ["latents"]
+
+        try:
+            result = self._pipe(**kwargs).images[0]
+        except TypeError as exc:
+            if step_callback is None:
+                raise
+            logger.warning(
+                "callback_on_step_end unsupported (%s); falling back to deprecated callback API",
+                exc,
+            )
+            kwargs.pop("callback_on_step_end", None)
+            kwargs.pop("callback_on_step_end_tensor_inputs", None)
+            kwargs["callback"] = step_callback
+            kwargs["callback_steps"] = 1
+            result = self._pipe(**kwargs).images[0]
+        logger.info("Finished inpaint in %.3fs", time.time() - start_t)
+        return result

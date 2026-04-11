@@ -22,6 +22,7 @@ class Canvas:
 
         # Drawing state
         self.drawing = False
+        self.has_active_strokes = False
         self.prev_x = -1
         self.prev_y = -1
 
@@ -37,12 +38,14 @@ class Canvas:
     def reset(self):
         """Clear all stroke data and imagery. Does NOT touch threading state."""
         self.drawing = False
+        self.has_active_strokes = False
         self._init_buffers()
 
     # -- drawing --------------------------------------------------------------
 
     def begin_stroke(self, x: int, y: int):
         self.drawing = True
+        self.has_active_strokes = True
         cv2.circle(self.mask_active, (x, y), self.brush_point_thickness, 150, -1)
         self.prev_x = x
         self.prev_y = y
@@ -56,13 +59,14 @@ class Canvas:
 
     def end_stroke(self, x: int, y: int):
         self.drawing = False
+        self.has_active_strokes = False
         self.prev_x = x
         self.prev_y = y
         self.mask_active = np.zeros(self.cfg.ui.present_size, dtype="uint8")
 
     def commit_active_to_mask(self):
         """Burn any active strokes into the persistent mask (called each display loop)."""
-        if np.any(self.mask_active):
+        if self.has_active_strokes:
             ucfg = self.cfg.ui
             resized = cv2.resize(self.mask_active, ucfg.image_size, interpolation=cv2.INTER_NEAREST)
             self.mask = cv2.add(self.mask, resized)

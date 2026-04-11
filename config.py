@@ -37,27 +37,44 @@ class RevealConfig:
     """Controls for the wavefront reveal animation and noise."""
     reveal_mode: int = 3
     stochastic_noise_strength: float = 0.35
+    reveal_start_threshold: float = 0.3
     reveal_white_steps: float = 0.25
     reveal_outro_alpha: float = 0.35
-    reveal_outro_duration: float = 1.5
+    reveal_outro_duration_ratio: float = 0.5
+    reveal_outro_min_duration: float = 1.0
+    reveal_outro_max_duration: float = 3.0
+    reveal_ease_power: float = 2.0
+    reveal_edge_width: float = 0.16
     latent_interp_smooth: float = 0.55
-    interp_fps: int = 30
+    step_phase_min_duration: float = 0.08
+    step_phase_max_duration: float = 0.75
+    refinement_crossfade_min_duration: float = 0.9
+    refinement_crossfade_max_duration: float = 1.6
 
     @property
     def reveal_edge(self) -> float:
         """Edge width for the reveal wavefront (varies by mode)."""
-        return 0.08 if self.reveal_mode == 1 else 0.12
+        if self.reveal_mode == 1:
+            return 0.08
+        return self.reveal_edge_width
 
 
 @dataclass
 class UIConfig:
-    """Brush, window, and pen-control settings."""
+    """Brush, window, and layout settings."""
     image_size: Tuple[int, int] = (512, 512)
     present_size: Tuple[int, int] = (512, 512)
     brush_thickness: int = 2
     brush_stroke_multiplier: float = 1.4
     max_brush_thickness: int = 20
-    pen_controls_active: bool = True
+    show_toolbar: bool = True
+    toolbar_height: int = 28
+    progress_bar_height: int = 6
+    canvas_margin: int = 12
+    status_bar_height: int = 16
+    display_fps_options: Tuple[int, ...] = (15, 30, 60, 100)
+    display_fps_default: int = 60
+    interp_fps: int = 30
     image_store_limit_count: int = 9
     window_name: str = "ai_paint_diffusion"
 
@@ -69,6 +86,34 @@ class UIConfig:
             self.present_size[1] / self.image_size[1],
         )
 
+    @property
+    def window_size(self) -> Tuple[int, int]:
+        """(w, h) of the full OpenCV window: toolbar + margins + canvas + footer."""
+        tb = self.toolbar_height if self.show_toolbar else 0
+        footer = self.progress_bar_height + self.status_bar_height
+        w = self.canvas_margin * 2 + self.present_size[0]
+        h = tb + self.canvas_margin + self.present_size[1] + self.canvas_margin + footer
+        return (w, h)
+
+
+@dataclass
+class DebugConfig:
+    """Controls optional debug image output."""
+    enabled: bool = False
+    dir: str = "debug_output"
+
+
+@dataclass
+class LoggingConfig:
+    """Controls structured runtime logging output."""
+    enabled: bool = True
+    dir: str = "logs"
+    file_name: str = "app.log"
+    level: str = "DEBUG"
+    console_level: str = "INFO"
+    max_bytes: int = 1_048_576
+    backup_count: int = 5
+
 
 @dataclass
 class AppConfig:
@@ -77,6 +122,8 @@ class AppConfig:
     inference: InferenceConfig = None  # type: ignore[assignment]
     reveal: RevealConfig = None    # type: ignore[assignment]
     ui: UIConfig = None            # type: ignore[assignment]
+    debug: DebugConfig = None      # type: ignore[assignment]
+    logging: LoggingConfig = None  # type: ignore[assignment]
 
     def __post_init__(self):
         if self.model is None:
@@ -87,3 +134,7 @@ class AppConfig:
             self.reveal = RevealConfig()
         if self.ui is None:
             self.ui = UIConfig()
+        if self.debug is None:
+            self.debug = DebugConfig()
+        if self.logging is None:
+            self.logging = LoggingConfig()
