@@ -1,7 +1,7 @@
 # cv_scribble_diffusion
 cv_scribble_diffusion opens a drawing window using OpenCV, allowing you to sketch with your mouse. Your scribble guides a ControlNet-driven Stable Diffusion inpainting pipeline that runs asynchronously and reveals generated imagery with a smooth animated wavefront expanding outward from your drawn strokes — creating a continuous loop of visual inspiration.
 
-![cv_scribble_diffusion_demo](https://github.com/user-attachments/assets/4e8307c4-4dd4-437d-9142-435f09a02ce7)
+![ezgif-6ada7aacde7deecd](https://github.com/user-attachments/assets/701740fa-ab1a-492e-b688-8f53b629e586)
 
 This is partly inspired by already existing similar projects, for example (not necessarily all inclusive):
 - krita-ai-diffusion (https://github.com/Acly/krita-ai-diffusion/releases/tag/v1.9.0)
