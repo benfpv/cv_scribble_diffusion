@@ -8,6 +8,35 @@ import numpy as np
 import cv2
 
 
+# -- easing ------------------------------------------------------------------
+
+def ease_progress(t: float, power: float) -> float:
+    """Ease-out curve: fast start, slow tail.
+
+    Returns ``1 - (1 - t) ** power`` for t in [0, 1].
+    Values above 1.0 pass through unchanged so the reveal wavefront
+    can fully cover boundary pixels (dist ≈ 1.0) when alpha exceeds 1.0.
+    """
+    if t <= 0.0:
+        return 0.0
+    if t >= 1.0:
+        return t
+    return 1.0 - (1.0 - t) ** power
+
+
+def compute_outro_duration(
+    generation_duration: float,
+    ratio: float,
+    min_duration: float,
+    max_duration: float,
+) -> float:
+    """Derive outro duration from the wall-clock generation time.
+
+    ``clamp(generation_duration * ratio, min_duration, max_duration)``
+    """
+    return max(min_duration, min(generation_duration * ratio, max_duration))
+
+
 # -- reveal wavefront --------------------------------------------------------
 
 def compute_reveal(dist_map: np.ndarray, alpha: float, edge: float) -> np.ndarray:

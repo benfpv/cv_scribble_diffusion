@@ -1,10 +1,22 @@
 """Canvas state: stroke masks, display image, brush logic, and feathered paste-back."""
 
+from dataclasses import dataclass
+
 import numpy as np
 import cv2
 from PIL import Image
 
+from colorspace import gray_to_bgr
 from config import AppConfig
+
+
+@dataclass
+class CanvasSnapshot:
+    """Restorable canvas state captured before a user edit."""
+
+    mask: np.ndarray
+    mask_present: np.ndarray
+    image: Image.Image
 
 
 class Canvas:
@@ -15,15 +27,15 @@ class Canvas:
         self._init_buffers()
 
         # Brush derived values
-        ucfg = cfg.ui
-        self.brush_thickness = ucfg.brush_thickness
-        self.brush_point_thickness = int(ucfg.brush_thickness - 0.5)
-        self.brush_stroke_thickness = max(1, round(ucfg.brush_thickness * ucfg.brush_stroke_multiplier))
+        self.brush_thickness = cfg.ui.brush_thickness
+        self._update_brush_geometry()
 
         # Drawing state
         self.drawing = False
+        self.has_active_strokes = False
         self.prev_x = -1
         self.prev_y = -1
+        self._last_committed_active = np.zeros(cfg.ui.present_size, dtype="uint8")
 
     # -- buffer management ----------------------------------------------------
 
@@ -37,12 +49,44 @@ class Canvas:
     def reset(self):
         """Clear all stroke data and imagery. Does NOT touch threading state."""
         self.drawing = False
+        self.has_active_strokes = False
         self._init_buffers()
+        self._last_committed_active = np.zeros(self.cfg.ui.present_size, dtype="uint8")
+
+    def snapshot(self) -> CanvasSnapshot:
+        """Capture restorable canvas state for undo."""
+        return CanvasSnapshot(
+            mask=self.mask.copy(),
+            mask_present=self.mask_present.copy(),
+            image=self.image.copy(),
+        )
+
+    def restore(self, snapshot: CanvasSnapshot):
+        """Restore a previously captured canvas state."""
+        self.mask = snapshot.mask.copy()
+        self.mask_present = snapshot.mask_present.copy()
+        self.image = snapshot.image.copy()
+        self.mask_active = np.zeros(self.cfg.ui.present_size, dtype="uint8")
+        self._last_committed_active = np.zeros(self.cfg.ui.present_size, dtype="uint8")
+        self.drawing = False
+        self.has_active_strokes = False
+        self.prev_x = -1
+        self.prev_y = -1
+
+    # -- coordinate validation ------------------------------------------------
+
+    def _clamp_coords(self, x: int, y: int) -> tuple:
+        """Clamp coordinates to valid present_size bounds."""
+        w, h = self.cfg.ui.present_size
+        return max(0, min(x, w - 1)), max(0, min(y, h - 1))
 
     # -- drawing --------------------------------------------------------------
 
     def begin_stroke(self, x: int, y: int):
+        x, y = self._clamp_coords(x, y)
         self.drawing = True
+        self.has_active_strokes = True
+        self._last_committed_active.fill(0)
         cv2.circle(self.mask_active, (x, y), self.brush_point_thickness, 150, -1)
         self.prev_x = x
         self.prev_y = y
@@ -50,33 +94,50 @@ class Canvas:
     def continue_stroke(self, x: int, y: int):
         if not self.drawing:
             return
+        x, y = self._clamp_coords(x, y)
         cv2.line(self.mask_active, (self.prev_x, self.prev_y), (x, y), 150, self.brush_stroke_thickness)
         self.prev_x = x
         self.prev_y = y
 
     def end_stroke(self, x: int, y: int):
+        x, y = self._clamp_coords(x, y)
         self.drawing = False
+        self.has_active_strokes = False
         self.prev_x = x
         self.prev_y = y
         self.mask_active = np.zeros(self.cfg.ui.present_size, dtype="uint8")
+        self._last_committed_active = np.zeros(self.cfg.ui.present_size, dtype="uint8")
 
     def commit_active_to_mask(self):
         """Burn any active strokes into the persistent mask (called each display loop)."""
-        if np.any(self.mask_active):
+        if self.has_active_strokes:
             ucfg = self.cfg.ui
-            resized = cv2.resize(self.mask_active, ucfg.image_size, interpolation=cv2.INTER_NEAREST)
+            delta_active = cv2.subtract(self.mask_active, self._last_committed_active)
+            if not np.any(delta_active):
+                return False
+            resized = cv2.resize(delta_active, ucfg.image_size, interpolation=cv2.INTER_NEAREST)
             self.mask = cv2.add(self.mask, resized)
             self.mask_present = cv2.resize(
-                cv2.cvtColor(self.mask, cv2.COLOR_GRAY2BGR),
+                gray_to_bgr(self.mask),
                 ucfg.present_size, interpolation=cv2.INTER_LINEAR,
             )
+            self._last_committed_active = self.mask_active.copy()
             return True
         return False
 
     def set_brush_thickness(self, thickness: int):
         self.brush_thickness = max(1, min(self.cfg.ui.max_brush_thickness, thickness))
-        self.brush_point_thickness = self.brush_thickness
-        self.brush_stroke_thickness = int(self.brush_thickness * self.cfg.ui.brush_stroke_multiplier)
+        self._update_brush_geometry()
+
+    def _update_brush_geometry(self):
+        """Keep brush point and stroke widths in sync with the user-selected size."""
+        # OpenCV circle uses radius for the first point. Radius 0 gives a
+        # single-pixel dot, which matches thickness=1 expectations.
+        self.brush_point_thickness = max(0, int((self.brush_thickness - 1) / 2))
+        self.brush_stroke_thickness = max(
+            1,
+            int(self.brush_thickness * self.cfg.ui.brush_stroke_multiplier),
+        )
 
     # -- image patching -------------------------------------------------------
 

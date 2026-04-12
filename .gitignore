@@ -23,6 +23,9 @@ sd-controlnet-scribble/
 # Saved images
 saved_image_*.png
 
+# Runtime logs
+logs/
+
 # IDE / OS
 .vscode/
 .idea/
