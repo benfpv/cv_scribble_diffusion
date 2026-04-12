@@ -21,6 +21,8 @@ class InferenceConfig:
     controlnet_conditioning_scale: float = 1.0
     mask_dilate: int = 48
     crop_pad: int = 64
+    crop_alignment: int = 8
+    crop_feather_px: int = 32
     crop_area_threshold: float = 0.7
     crop_min_dim: int = 64
     min_inference_steps: int = 2
@@ -72,7 +74,9 @@ class UIConfig:
     progress_bar_height: int = 6
     canvas_margin: int = 12
     status_bar_height: int = 16
-    display_fps_options: Tuple[int, ...] = (15, 30, 60, 100)
+    display_fps_options: Tuple[int, ...] = (
+        15, 24, 30, 60, 75, 90, 100, 120, 144, 165, 180, 200, 240,
+    )
     display_fps_default: int = 60
     interp_fps: int = 30
     image_store_limit_count: int = 9

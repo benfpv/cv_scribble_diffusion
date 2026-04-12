@@ -30,20 +30,36 @@ class StatusInfo:
     quality_min: int
     quality_max: int
     gen_count: int
+    display_fps: int = 0
+    brush_thickness: int = 0
+    ui_notice: Optional[str] = None
+    thread_error: Optional[str] = None
 
 
 _DEFAULT_BUTTONS: Tuple[ButtonDef, ...] = (
-    ButtonDef("exit", "EXIT", 40, (100, 100, 100), (180, 180, 180)),
-    ButtonDef("reset", "RESET", 40, (50, 50, 150), (80, 80, 240)),
-    ButtonDef("mask", "MASK", 40, (50, 200, 50), (50, 120, 50)),
-    ButtonDef("fps", "FPS", 40, (120, 100, 50), (180, 150, 80)),
+    ButtonDef("exit", "EXIT", 42, (58, 58, 58), (86, 86, 86)),
+    ButtonDef("reset", "CLEAR", 46, (56, 72, 138), (78, 98, 180)),
+    ButtonDef("save", "SAVE", 42, (70, 104, 132), (98, 142, 174)),
+    ButtonDef("undo", "UNDO", 44, (124, 84, 68), (172, 116, 92)),
+    ButtonDef("mask", "MASK", 42, (62, 136, 82), (44, 96, 58)),
+    ButtonDef("brush_dec", "THIN", 42, (92, 84, 70), (130, 120, 102)),
+    ButtonDef("brush_inc", "THICK", 46, (92, 84, 70), (130, 120, 102)),
+    ButtonDef("steps_dec", "MAX-", 42, (92, 84, 120), (130, 118, 164)),
+    ButtonDef("steps_inc", "MAX+", 42, (92, 84, 120), (130, 118, 164)),
+    ButtonDef("fps", "FPS", 44, (84, 96, 110), (120, 136, 154)),
 )
 
-_BUTTON_GAP = 8
+_BUTTON_GAP = 4
+_GROUP_GAP = 14
 _BUTTON_V_PAD = 4
-_PROGRESS_BG = (40, 40, 40)
-_PROGRESS_FG = (200, 140, 60)
-_CANVAS_BORDER = (72, 72, 72)
+_WINDOW_BG = (20, 20, 20)
+_TOOLBAR_BG = (28, 28, 28)
+_STATUS_BG = (24, 24, 24)
+_PANEL_BORDER = (54, 54, 54)
+_PROGRESS_BG = (46, 46, 46)
+_PROGRESS_FG = (86, 164, 236)
+_CANVAS_BORDER = (82, 82, 82)
+_GROUP_BREAK_AFTER = {"undo", "mask", "brush_inc"}
 
 
 class UIOverlay:
@@ -63,7 +79,8 @@ class UIOverlay:
         """Compute centred button positions in the toolbar strip."""
         cfg = self._cfg
         ww = cfg.present_size[0] + 2 * cfg.canvas_margin
-        total_w = sum(b.width for b in self._buttons) + _BUTTON_GAP * (len(self._buttons) - 1)
+        total_w = sum(b.width for b in self._buttons)
+        total_w += sum(self._gap_after(btn.action) for btn in self._buttons[:-1])
         x = (ww - total_w) // 2
         btn_h = cfg.toolbar_height - 2 * _BUTTON_V_PAD
         y1 = _BUTTON_V_PAD
@@ -71,8 +88,15 @@ class UIOverlay:
         rects = []
         for b in self._buttons:
             rects.append((b.action, x, y1, x + b.width, y2))
-            x += b.width + _BUTTON_GAP
+            x += b.width + self._gap_after(b.action)
         self._button_rects = rects
+
+    @staticmethod
+    def _gap_after(action: str) -> int:
+        """Use larger gaps between logical toolbar groups."""
+        if action in _GROUP_BREAK_AFTER:
+            return _GROUP_GAP
+        return _BUTTON_GAP
 
     # -- public properties ----------------------------------------------------
 
@@ -144,6 +168,12 @@ class UIOverlay:
         cy = self.canvas_y_offset
 
         frame = np.zeros((wh, ww, 3), dtype=np.uint8)
+        frame[:, :] = _WINDOW_BG
+
+        # -- toolbar background strip --
+        if cfg.show_toolbar:
+            frame[:cfg.toolbar_height, :] = _TOOLBAR_BG
+            cv2.line(frame, (0, cfg.toolbar_height - 1), (ww - 1, cfg.toolbar_height - 1), _PANEL_BORDER, 1)
 
         # -- canvas region --
         display = canvas_frame.copy()
@@ -168,6 +198,8 @@ class UIOverlay:
 
         # -- status bar --
         if status is not None:
+            status_y = bar_y + cfg.progress_bar_height
+            frame[status_y:status_y + cfg.status_bar_height, cx:cx + pw] = _STATUS_BG
             self._draw_status(frame, status, cx, bar_y + cfg.progress_bar_height, pw)
 
         return frame
@@ -185,10 +217,11 @@ class UIOverlay:
             if action == "mask":
                 color = btn.color if triggered else btn.color_active
             cv2.rectangle(frame, (bx1, by1), (bx2, by2), color, -1)
+            cv2.rectangle(frame, (bx1, by1), (bx2, by2), _PANEL_BORDER, 1)
             # Use dynamic label override if provided, else default
             label = (button_labels or {}).get(action, btn.label)
             font = cv2.FONT_HERSHEY_SIMPLEX
-            scale = 0.3
+            scale = 0.27
             thickness = 1
             (tw, th), _ = cv2.getTextSize(label, font, scale, thickness)
             tx = bx1 + (btn.width - tw) // 2
@@ -201,8 +234,23 @@ class UIOverlay:
         font = cv2.FONT_HERSHEY_SIMPLEX
         scale = 0.32
         thickness = 1
-        color = (110, 110, 110)
+        color = (152, 152, 152)
         text_y = y_top + 12
+
+        # Thread error takes precedence over normal status
+        if status.thread_error:
+            error_color = (50, 50, 220)  # red in BGR
+            error_text = f"Error: {status.thread_error[:60]}"
+            cv2.putText(frame, error_text, (x_off + 2, text_y),
+                        font, scale, error_color, thickness, cv2.LINE_AA)
+            return
+
+        if status.ui_notice:
+            notice_color = (90, 190, 230)
+            notice_text = status.ui_notice[:90]
+            cv2.putText(frame, notice_text, (x_off + 2, text_y),
+                        font, scale, notice_color, thickness, cv2.LINE_AA)
+            return
 
         # Left: quality details
         left = self._quality_text(status)
@@ -228,4 +276,7 @@ class UIOverlay:
 
     def _instances_text(self, status: StatusInfo) -> str:
         """Human-readable generation counter label for the status bar."""
-        return f"Generations: {status.gen_count}"
+        return (
+            f"Generations: {status.gen_count} | FPS: {status.display_fps} | "
+            f"Brush: {status.brush_thickness}"
+        )

@@ -14,6 +14,7 @@ import numpy as np
 import cv2
 import torch
 
+from colorspace import rgb_to_bgr
 from config import AppConfig
 from reveal import build_dist_map, compute_reveal, ease_progress, compute_outro_duration
 from runtime_logging import get_logger
@@ -436,9 +437,9 @@ class Animator:
             px1, py1, px2, py2 = self._present_crop_bounds(crop_region)
             pw = px2 - px1
             ph = py2 - py1
-            return cv2.resize(cv2.cvtColor(decoded_uint8, cv2.COLOR_RGB2BGR),
+            return cv2.resize(rgb_to_bgr(decoded_uint8),
                               (pw, ph), interpolation=cv2.INTER_LINEAR).astype(np.float32)
-        return cv2.resize(cv2.cvtColor(decoded_uint8, cv2.COLOR_RGB2BGR),
+        return cv2.resize(rgb_to_bgr(decoded_uint8),
                           ucfg.present_size, interpolation=cv2.INTER_LINEAR).astype(np.float32)
 
     def _compose_reveal(self, decoded_bgr_f32, alpha, dist_map,
@@ -467,6 +468,13 @@ class Animator:
             reveal = compute_reveal(dist_map, eased_alpha, edge)[:, :, np.newaxis]
             return (source * reveal + prev_img.astype(np.float32) * (1.0 - reveal)).astype(np.uint8)
         weight = min(max(eased_alpha, 0.0), 1.0)
+        if crop_region is not None:
+            px1, py1, px2, py2 = self._present_crop_bounds(crop_region)
+            result = prev_img.copy()
+            prev_crop = prev_img[py1:py2, px1:px2]
+            blended_crop = cv2.addWeighted(prev_crop, 1.0 - weight, source.astype(np.uint8), weight, 0)
+            result[py1:py2, px1:px2] = blended_crop
+            return result
         return cv2.addWeighted(prev_img, 1.0 - weight, source.astype(np.uint8), weight, 0)
 
 

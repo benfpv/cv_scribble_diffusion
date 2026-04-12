@@ -118,6 +118,19 @@ def test_mask_accumulates_across_commits():
     assert second_nonzero >= first_nonzero
 
 
+def test_commit_same_active_twice_is_noop_second_time():
+    c = make_canvas()
+    c.mask_active[100, 100] = 150
+    c.has_active_strokes = True
+    changed_first = c.commit_active_to_mask()
+    mask_after_first = c.mask.copy()
+    changed_second = c.commit_active_to_mask()
+
+    assert changed_first is True
+    assert changed_second is False
+    assert np.array_equal(mask_after_first, c.mask)
+
+
 # -- reset -------------------------------------------------------------------
 
 def test_reset_clears_mask():
@@ -150,6 +163,19 @@ def test_reset_clears_image():
     assert np.all(np.array(c.image) == 0)
 
 
+def test_snapshot_and_restore_round_trip():
+    c = make_canvas()
+    c.mask[10, 10] = 150
+    c.mask_present[5, 5] = (10, 20, 30)
+    snap = c.snapshot()
+
+    c.reset()
+    c.restore(snap)
+
+    assert c.mask[10, 10] == 150
+    assert tuple(c.mask_present[5, 5]) == (10, 20, 30)
+
+
 # -- brush thickness ---------------------------------------------------------
 
 def test_set_brush_thickness_clamps_to_max():
@@ -168,3 +194,15 @@ def test_set_brush_thickness_updates_stroke_thickness():
     c = make_canvas()
     c.set_brush_thickness(10)
     assert c.brush_stroke_thickness >= 10  # multiplier makes it >= raw value
+
+
+def test_set_brush_thickness_updates_point_thickness():
+    c = make_canvas()
+    c.set_brush_thickness(9)
+    assert c.brush_point_thickness == 4
+
+
+def test_set_brush_thickness_one_has_single_pixel_start_radius():
+    c = make_canvas()
+    c.set_brush_thickness(1)
+    assert c.brush_point_thickness == 0

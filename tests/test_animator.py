@@ -128,6 +128,26 @@ def test_compose_reveal_no_dist_map_has_no_white_preflash():
     assert np.array_equal(out, prev_img)
 
 
+def test_compose_reveal_no_dist_map_with_crop_blends_only_crop_region():
+    animator = make_animator()
+    prev_img = np.zeros((16, 16, 3), dtype=np.uint8)
+    source_crop = np.full((8, 8, 3), 120, dtype=np.float32)
+    crop_region = (4, 4, 12, 12)
+
+    out = animator._compose_reveal(
+        source_crop,
+        alpha=0.5,
+        dist_map=None,
+        crop_region=crop_region,
+        prev_img=prev_img,
+    )
+
+    # Outside the crop should remain unchanged.
+    assert int(out[1, 1].mean()) == 0
+    # Inside the crop should be blended (non-zero).
+    assert int(out[6, 6].mean()) > 0
+
+
 def test_update_prev_image_keeps_outside_pixels_unchanged():
     animator = make_animator()
     # Previous frame has dark background; new final frame is bright.

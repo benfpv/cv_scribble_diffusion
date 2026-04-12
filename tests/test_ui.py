@@ -186,6 +186,12 @@ def test_fps_button_in_default_layout():
     ui = make_ui()
     actions = [action for action, *_ in ui._button_rects]
     assert "fps" in actions
+    assert "save" in actions
+    assert "undo" in actions
+    assert "brush_dec" in actions
+    assert "brush_inc" in actions
+    assert "steps_dec" in actions
+    assert "steps_inc" in actions
 
 
 def test_hit_test_fps_button():
@@ -197,6 +203,50 @@ def test_hit_test_fps_button():
             break
     else:
         pytest.fail("fps button not found in layout")
+
+
+def test_hit_test_save_button():
+    ui = make_ui()
+    for action, bx1, by1, bx2, by2 in ui._button_rects:
+        if action == "save":
+            result = ui.hit_test((bx1 + bx2) // 2, (by1 + by2) // 2)
+            assert result == "save"
+            break
+    else:
+        pytest.fail("save button not found in layout")
+
+
+def test_hit_test_undo_button():
+    ui = make_ui()
+    for action, bx1, by1, bx2, by2 in ui._button_rects:
+        if action == "undo":
+            result = ui.hit_test((bx1 + bx2) // 2, (by1 + by2) // 2)
+            assert result == "undo"
+            break
+    else:
+        pytest.fail("undo button not found in layout")
+
+
+def test_hit_test_brush_buttons():
+    ui = make_ui()
+    seen = set()
+    for action, bx1, by1, bx2, by2 in ui._button_rects:
+        if action in {"brush_dec", "brush_inc"}:
+            result = ui.hit_test((bx1 + bx2) // 2, (by1 + by2) // 2)
+            assert result == action
+            seen.add(action)
+    assert seen == {"brush_dec", "brush_inc"}
+
+
+def test_hit_test_step_buttons():
+    ui = make_ui()
+    seen = set()
+    for action, bx1, by1, bx2, by2 in ui._button_rects:
+        if action in {"steps_dec", "steps_inc"}:
+            result = ui.hit_test((bx1 + bx2) // 2, (by1 + by2) // 2)
+            assert result == action
+            seen.add(action)
+    assert seen == {"steps_dec", "steps_inc"}
 
 
 def test_compose_frame_with_button_labels():
@@ -216,8 +266,8 @@ def test_compose_frame_with_button_labels():
     assert result.shape == (586, 536, 3)
 
 
-def test_compose_frame_shape_with_four_buttons():
-    """Window shape must remain correct with the extra fps button."""
+def test_compose_frame_shape_with_toolbar_buttons():
+    """Window shape must remain correct with the expanded toolbar."""
     cfg = UIConfig(present_size=(512, 512), toolbar_height=28, progress_bar_height=6)
     ui = make_ui(cfg)
     canvas_frame = np.zeros((512, 512, 3), dtype=np.uint8)
@@ -233,6 +283,18 @@ def test_compose_frame_shape_with_four_buttons():
     assert result.shape == (586, 536, 3)
 
 
+def test_toolbar_group_spacing_is_larger_between_clusters():
+    ui = make_ui()
+    rects = {action: (x1, x2) for action, x1, _y1, x2, _y2 in ui._button_rects}
+
+    normal_gap = rects["save"][0] - rects["reset"][1]
+    group_gap_one = rects["mask"][0] - rects["undo"][1]
+    group_gap_two = rects["steps_dec"][0] - rects["brush_inc"][1]
+
+    assert group_gap_one > normal_gap
+    assert group_gap_two > normal_gap
+
+
 # -- status bar ---------------------------------------------------------------
 
 def test_compose_frame_with_status_info():
@@ -242,7 +304,7 @@ def test_compose_frame_with_status_info():
     canvas_frame = np.zeros((512, 512, 3), dtype=np.uint8)
     mask_active = np.zeros((512, 512), dtype=np.uint8)
     mask_present = np.zeros((512, 512, 3), dtype=np.uint8)
-    status = StatusInfo(quality=6, quality_min=2, quality_max=18, gen_count=3)
+    status = StatusInfo(quality=6, quality_min=2, quality_max=18, gen_count=3, display_fps=60)
 
     result = ui.compose_frame(
         canvas_frame, mask_active, mask_present,
@@ -265,20 +327,52 @@ def test_canvas_x_offset():
 
 def test_quality_text_is_clear_for_active_generation():
     ui = make_ui()
-    status = StatusInfo(quality=6, quality_min=2, quality_max=18, gen_count=3)
+    status = StatusInfo(quality=6, quality_min=2, quality_max=18, gen_count=3, display_fps=60)
     text = ui._quality_text(status)
     assert text == "Quality (diffusion steps): 6 (min 2, max 18)"
 
 
 def test_quality_text_is_clear_when_pending():
     ui = make_ui()
-    status = StatusInfo(quality=0, quality_min=2, quality_max=18, gen_count=0)
+    status = StatusInfo(quality=0, quality_min=2, quality_max=18, gen_count=0, display_fps=30)
     text = ui._quality_text(status)
     assert text == "Quality (diffusion steps): pending (min 2, max 18)"
 
 
 def test_instances_text_is_clear():
     ui = make_ui()
-    status = StatusInfo(quality=0, quality_min=2, quality_max=18, gen_count=7)
+    status = StatusInfo(quality=0, quality_min=2, quality_max=18, gen_count=7, display_fps=60, brush_thickness=3)
     text = ui._instances_text(status)
-    assert text == "Generations: 7"
+    assert text == "Generations: 7 | FPS: 60 | Brush: 3"
+
+
+def test_compose_frame_with_ui_notice():
+    cfg = UIConfig(present_size=(512, 512), toolbar_height=28, progress_bar_height=6)
+    ui = make_ui(cfg)
+    canvas_frame = np.zeros((512, 512, 3), dtype=np.uint8)
+    mask_active = np.zeros((512, 512), dtype=np.uint8)
+    mask_present = np.zeros((512, 512, 3), dtype=np.uint8)
+    status = StatusInfo(
+        quality=0,
+        quality_min=2,
+        quality_max=18,
+        gen_count=0,
+        display_fps=60,
+        brush_thickness=3,
+        ui_notice="Saved snapshot: C:/tmp/saved_image_2.png",
+    )
+
+    result = ui.compose_frame(
+        canvas_frame,
+        mask_active,
+        mask_present,
+        show_mask=False,
+        has_active_strokes=False,
+        generation_progress=0.0,
+        is_generating=False,
+        button_states={},
+        status=status,
+    )
+    status_y = 40 + 512 + 6
+    status_region = result[status_y:status_y + 16, 12:524]
+    assert status_region.sum() > 0

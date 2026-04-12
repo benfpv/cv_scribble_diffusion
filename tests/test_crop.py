@@ -13,7 +13,8 @@ from config import AppConfig
 
 # -- helper mirroring App.async_diffusion crop logic ------------------------
 
-def decide_crop(mask_gray, image_size, crop_pad, crop_area_threshold, crop_min_dim):
+def decide_crop(mask_gray, image_size, crop_pad, crop_area_threshold, crop_min_dim,
+                crop_alignment=8):
     """Pure mirror of the crop decision logic from App.async_diffusion."""
     nonzero = cv2.findNonZero(mask_gray)
     if nonzero is None:
@@ -24,8 +25,8 @@ def decide_crop(mask_gray, image_size, crop_pad, crop_area_threshold, crop_min_d
     ry1 = max(0, by - crop_pad)
     rx2 = min(image_size[0], bx + bw + crop_pad)
     ry2 = min(image_size[1], by + bh + crop_pad)
-    rw = (rx2 - rx1) // 8 * 8
-    rh = (ry2 - ry1) // 8 * 8
+    rw = (rx2 - rx1) // crop_alignment * crop_alignment
+    rh = (ry2 - ry1) // crop_alignment * crop_alignment
     rx2 = rx1 + rw
     ry2 = ry1 + rh
 

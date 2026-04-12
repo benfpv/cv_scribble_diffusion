@@ -12,6 +12,7 @@ import numpy as np
 from PIL import Image, ImageDraw
 
 from config import DebugConfig
+from colorspace import rgb_to_bgr
 from runtime_logging import get_logger
 
 
@@ -74,6 +75,6 @@ def _write_image(path: str, image):
             cv2.imwrite(path, image)
         elif image.ndim == 3 and image.shape[2] == 3:
             # Assume RGB (from PIL/diffusers); convert to BGR for OpenCV
-            cv2.imwrite(path, cv2.cvtColor(image, cv2.COLOR_RGB2BGR))
+            cv2.imwrite(path, rgb_to_bgr(image))
         else:
             cv2.imwrite(path, image)
