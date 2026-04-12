@@ -1,71 +1,115 @@
 # cv_scribble_diffusion
-cv_scribble_diffusion opens a drawing window using OpenCV, allowing you to sketch with your mouse. Your scribble guides a ControlNet-driven Stable Diffusion inpainting pipeline that runs asynchronously and reveals generated imagery with a smooth animated wavefront expanding outward from your drawn strokes — creating a continuous loop of visual inspiration.
+
+Real-time scribble-to-image generation with OpenCV, ControlNet scribble guidance, and Stable Diffusion inpainting.
+
+Draw on the canvas and the app continuously generates imagery around your strokes. New results are blended in with a reveal animation so the output feels live and iterative.
 
 ![ezgif-6ada7aacde7deecd](https://github.com/user-attachments/assets/701740fa-ab1a-492e-b688-8f53b629e586)
 
-This is partly inspired by already existing similar projects, for example (not necessarily all inclusive):
-- krita-ai-diffusion (https://github.com/Acly/krita-ai-diffusion/releases/tag/v1.9.0)
+Inspired in part by projects such as [krita-ai-diffusion](https://github.com/Acly/krita-ai-diffusion/releases/tag/v1.9.0).
 
-# Repository Contents
-1. `main.py` — application entry point; all drawing, diffusion, and animation logic
-2. `functions_diffusion_image_s.py` — thin wrappers around the diffusers pipeline calls
-3. `LICENSE`
-4. `README.md`
+## Repository Overview
 
-# Models
-**The model weights are NOT included in this repository** (files are too large).
-You must acquire and place them in the project root yourself before running.
+- `main.py`: app lifecycle, toolbar input, keyboard shortcuts, generation loop
+- `pipeline.py`: model loading and inpaint execution
+- `canvas.py`: stroke masks, brush behavior, image compositing helpers
+- `animator.py`: reveal/interpolation animation pipeline
+- `reveal.py`: reveal map and blend math
+- `config.py`: centralized app settings
+- `requirements.txt`: Python dependencies
 
-### Required models (place in project root)
+## Models
+
+Model weights are not included in this repository.
+
+Download and place these folders in the project root:
 
 | Directory | Source |
 |---|---|
 | `stable-diffusion-v1-5/` | [runwayml/stable-diffusion-v1-5](https://huggingface.co/runwayml/stable-diffusion-v1-5) |
 | `sd-controlnet-scribble/` | [lllyasviel/sd-controlnet-scribble](https://huggingface.co/lllyasviel/sd-controlnet-scribble) |
 
-The expected project layout after placing the models:
-```
-cv_scribble_diffusion/
-    main.py
-    functions_diffusion_image_s.py
-    stable-diffusion-v1-5/      ← download separately
-    sd-controlnet-scribble/     ← download separately
-```
+`madebyollin/taesd` is downloaded automatically on first run.
 
-### Auto-downloaded model
-`madebyollin/taesd` (AutoencoderTiny) is downloaded automatically on the first run via HuggingFace and cached locally. No manual step needed.
+## Requirements
 
-> **Note:** If you want to use a different base model or ControlNet, update `local_pipe_path` / `local_scribble_path` in `main.py` and adjust the pipeline class in `functions_diffusion_image_s.py` as needed.
+- Python 3.10+
+- GPU strongly recommended (CPU is supported but much slower)
+- Packages listed in `requirements.txt`:
+    - `numpy`
+    - `opencv-python`
+    - `pillow`
+    - `diffusers`
+    - `torch`
+    - `accelerate`
 
-# Requirements
-1. Python 3.12+ (may also work on other 3.x versions)
-2. Python packages: `numpy`, `opencv-python`, `pillow`, `diffusers`, `torch`
-3. A CUDA-capable GPU is strongly recommended; CPU inference is supported but very slow
+## Quick Start
 
-# Instructions to Run
-1. Download the required models listed above and place them in the project root (paths must match `local_pipe_path` and `local_scribble_path` at the top of `main.py`).
-2. *(Optional)* Edit parameters such as `prompt`, `reveal_mode`, or `brush_thickness` in `Main.__init__` inside `main.py`.
-3. Run `main.py`:
-   ```
-   py main.py
-   ```
-4. The first run may take a minute or two to load the models. Once the window appears, draw on it and images will be generated continuously in the background.
-5. Exit by pressing **Esc** in the window, or **Ctrl+C** in the terminal.
+1. Open a terminal in the repository root.
+2. Create and activate a virtual environment.
+3. Install dependencies:
 
-# Keyboard Inputs
+     ```bash
+     pip install -r requirements.txt
+     ```
+
+4. Ensure required model directories are present.
+5. Run the app:
+
+     ```bash
+     py main.py
+     ```
+
+First launch may take a while due to model initialization.
+
+## Controls
+
+### Mouse
+
+- Left click + drag: draw strokes
+- Toolbar buttons (top strip):
+    - `EXIT`: exit (multi-click confirmation)
+    - `RESET`: clear canvas
+    - `SAVE`: save current image to `saved_image_N.png`
+    - `MASK`: toggle mask visibility
+    - `UNDO`: undo previous stroke
+    - `THIN` / `THICK`: adjust brush size
+    - `MAX-` / `MAX+`: adjust runtime max diffusion steps
+    - `FPS`: cycle display FPS presets
+
+### Keyboard
+
 | Key | Action |
 |---|---|
-| Draw (left mouse button) | Add strokes to guide generation |
-| **Spacebar** | Reset canvas to blank |
-| **Enter** | Save current image to working directory (no mask overlay) |
-| **Tab** | Toggle stroke-mask visibility |
-| **Ctrl+Z / Z / U** | Undo last stroke |
-| **Left arrow** | Decrease brush size |
-| **Right arrow** | Increase brush size |
-| **Esc** | Exit app |
+| `Space` | Reset canvas |
+| `Enter` | Save current image |
+| `Tab` | Toggle mask visibility |
+| `Ctrl+Z`, `Z`, `U` | Undo last stroke |
+| `Left Arrow` | Decrease brush thickness |
+| `Right Arrow` | Increase brush thickness |
+| `Esc` | Exit app |
 
-# Known Limitations & Future Directions
-- **Power draw:** Consider a smaller model, lower generation frequency, or NPU offload.
-- **Camera integration:** Capture a photo via cv2, apply edge filtering, and use the edges alongside the user's strokes as ControlNet input.
-- **Image tracing:** Import an existing image's edges as a starting-point overlay for the user to draw on top of.
-- **Richer tooling:** More brushes, layers, or deeper integration with an existing drawing app like Krita.
+## Configuration
+
+Edit values in `config.py`:
+
+- `ModelConfig`: local model paths and GPU usage
+- `InferenceConfig`: prompt, guidance, crop behavior, step schedule
+- `RevealConfig`: reveal mode, interpolation, noise/outro tuning
+- `UIConfig`: image/present size, brush defaults, window settings
+
+## Troubleshooting
+
+- Startup fails loading models:
+    - Verify `stable-diffusion-v1-5/` and `sd-controlnet-scribble/` exist in the repository root.
+- Very slow generation:
+    - Confirm CUDA is available and `use_gpu` is enabled in config.
+- No visible effect after drawing:
+    - Draw a clearer stroke, then wait for the next generation pass.
+
+## Future Directions
+
+- Add a Gradio demo for browser-based interaction and easier sharing.
+- Add camera/photo import as a source for initial edge guidance.
+- Add image tracing overlays and richer brush tooling.
+- Explore lower-power runtime modes (smaller models or reduced generation frequency).
