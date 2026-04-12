@@ -59,6 +59,7 @@ cv_scribble_diffusion/
 | **Spacebar** | Reset canvas to blank |
 | **Enter** | Save current image to working directory (no mask overlay) |
 | **Tab** | Toggle stroke-mask visibility |
+| **Ctrl+Z / Z / U** | Undo last stroke |
 | **Left arrow** | Decrease brush size |
 | **Right arrow** | Increase brush size |
 | **Esc** | Exit app |

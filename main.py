@@ -128,6 +128,48 @@ class App:
 
     # -- mouse / keyboard -----------------------------------------------------
 
+    def _handle_keypress(self, key_code: int):
+        """Map keyboard input to toolbar-equivalent actions."""
+        if key_code < 0:
+            return
+
+        # cv2.waitKeyEx returns a platform-specific code. The low byte covers
+        # ASCII/control keys across backends.
+        low_byte = key_code & 0xFF
+
+        if low_byte == 27:  # Esc
+            self.trigger_exit()
+            return
+
+        if low_byte == 32:  # Space
+            if self._gen_state != GenState.RESETTING:
+                print("...[Keyboard] Reset Canvas...")
+                logger.info("Keyboard reset requested")
+                self.reset_canvas()
+            return
+        if low_byte in (13, 10):  # Enter
+            self._save_image()
+            return
+        if low_byte == 9:  # Tab
+            self.mask_visibility_toggle = not self.mask_visibility_toggle
+            state = "On" if self.mask_visibility_toggle else "Off"
+            print(f"...[Keyboard] Toggle Mask Visibility [{state}]...")
+            logger.info("Mask visibility toggled via keyboard: %s", state)
+            return
+
+        # Undo: support Ctrl+Z (26), plain z/Z, and u/U as fallback.
+        if low_byte in (26, ord("z"), ord("Z"), ord("u"), ord("U")):
+            self._undo_last_stroke()
+            return
+
+        # Arrow keys can vary by backend; support common forms.
+        if key_code in (2424832, 81):  # Left
+            self._adjust_brush_thickness(-1)
+            return
+        if key_code in (2555904, 83):  # Right
+            self._adjust_brush_thickness(1)
+            return
+
     def mouse_callback(self, event, x, y, flags, param):
         """OpenCV mouse callback: toolbar hits and canvas strokes."""
         cfg = self.cfg
@@ -625,7 +667,8 @@ class App:
             )
 
             cv2.imshow(ucfg.window_name, window_frame)
-            cv2.waitKey(1)
+            key_code = cv2.waitKeyEx(1)
+            self._handle_keypress(key_code)
 
             if self.exit_triggered:
                 break

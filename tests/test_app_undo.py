@@ -132,3 +132,29 @@ def test_undo_during_generation_restores_after_reset(monkeypatch):
 
     assert not np.any(app.canvas.mask)
     assert app._gen_state == GenState.IDLE
+
+
+@pytest.mark.parametrize("key_code", [26, ord("z"), ord("Z"), ord("u"), ord("U")])
+def test_keyboard_undo_shortcuts_restore_previous_state(app, key_code):
+    app.mouse_callback(cv2.EVENT_LBUTTONDOWN, 20, 50, 0, None)
+    app.canvas.commit_active_to_mask()
+    app.mouse_callback(cv2.EVENT_LBUTTONUP, 20, 50, 0, None)
+    assert np.any(app.canvas.mask)
+
+    app._handle_keypress(key_code)
+
+    assert not np.any(app.canvas.mask)
+    assert app._gen_state == GenState.IDLE
+
+
+def test_keyboard_shortcuts_map_to_documented_actions(app):
+    app.mask_visibility_toggle = False
+    app._handle_keypress(9)  # Tab
+    assert app.mask_visibility_toggle is True
+
+    start_thickness = app.canvas.brush_thickness
+    app._handle_keypress(2555904)  # Right arrow
+    assert app.canvas.brush_thickness == start_thickness + 1
+
+    app._handle_keypress(2424832)  # Left arrow
+    assert app.canvas.brush_thickness == start_thickness
