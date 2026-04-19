@@ -17,9 +17,9 @@ import numpy as np
 import time
 import cv2
 import ctypes
-from PIL import Image
 import threading
 import enum
+from collections import deque
 from dataclasses import dataclass
 
 from typing import Optional
@@ -29,8 +29,12 @@ from pipeline import DiffusionPipeline
 from canvas import Canvas, CanvasSnapshot
 from animator import Animator
 from debug import DebugWriter
+from generation import (
+    decide_crop, make_dilation_kernel, make_control_image,
+    compute_dist_map_inputs, build_inpaint_inputs,
+)
 from runtime_logging import configure_logging, get_logger
-from colorspace import rgb_to_bgr, gray_to_rgb
+from colorspace import rgb_to_bgr
 from ui import UIOverlay, StatusInfo
 
 
@@ -43,6 +47,10 @@ class GenState(enum.Enum):
     READY = "ready"            # Strokes present, should generate
     GENERATING = "generating"  # Pipeline currently running
     RESETTING = "resetting"    # Reset requested, awaiting thread drain
+
+
+class _DiffusionCancelled(Exception):
+    """Raised inside the pipeline step callback to abort cleanly on shutdown."""
 
 
 @dataclass
@@ -95,8 +103,18 @@ class App:
         self._gen_count = 0
         self._gen_seq = 0
         self._prev_gen_mask = np.zeros(cfg.ui.image_size, dtype="uint8")
-        self._undo_stack = []
+        self._undo_stack: deque[AppSnapshot] = deque(maxlen=30)
         self._pending_restore: Optional[AppSnapshot] = None
+
+        # Cooperative shutdown for the diffusion thread.
+        self._stop_event = threading.Event()
+        self._diffusion_thread: Optional[threading.Thread] = None
+
+        # Consecutive-failure tracking for exponential backoff in async_diffusion.
+        # NOTE: Not reset by reset_canvas() — the pipeline's instability is
+        # independent of canvas state. Only a successful generation clears it.
+        self._consecutive_failures = 0
+        self._max_consecutive_failures = 5
 
         # Synchronisation between diffusion thread and display loop.
         self._gen_done = threading.Event()
@@ -110,7 +128,12 @@ class App:
         logger.info("OpenCV window ready: name=%s size=%s", cfg.ui.window_name, cfg.ui.window_size)
 
     def _center_window(self):
-        """Center the OpenCV window on the primary screen."""
+        """Center the OpenCV window on the primary screen.
+
+        Windows-only via ``ctypes.windll.user32``. On non-Windows platforms
+        the screen-size lookup raises and we fall through to placement at
+        ``(0, 0)``, which most window managers will then reposition.
+        """
         ww, wh = self.cfg.ui.window_size
         sw = ww
         sh = wh
@@ -143,8 +166,7 @@ class App:
 
         if low_byte == 32:  # Space
             if self._gen_state != GenState.RESETTING:
-                print("...[Keyboard] Reset Canvas...")
-                logger.info("Keyboard reset requested")
+                self._announce("Reset Canvas", source="Keyboard")
                 self.reset_canvas()
             return
         if low_byte in (13, 10):  # Enter
@@ -153,8 +175,7 @@ class App:
         if low_byte == 9:  # Tab
             self.mask_visibility_toggle = not self.mask_visibility_toggle
             state = "On" if self.mask_visibility_toggle else "Off"
-            print(f"...[Keyboard] Toggle Mask Visibility [{state}]...")
-            logger.info("Mask visibility toggled via keyboard: %s", state)
+            self._announce(f"Toggle Mask Visibility [{state}]", source="Keyboard")
             return
 
         # Undo: support Ctrl+Z (26), plain z/Z, and u/U as fallback.
@@ -182,8 +203,7 @@ class App:
                     self._exit_confirm_stage = 0
 
                 if self._exit_confirm_stage >= 2:
-                    print("...[Toolbar] Exiting...")
-                    logger.info("Toolbar exit confirmed at stage 3")
+                    self._announce("Exiting", source="Toolbar")
                     self._exit_confirm_stage = 0
                     self._exit_confirm_until = 0.0
                     self.trigger_exit()
@@ -195,24 +215,21 @@ class App:
                         notice = "Click EXIT once more to confirm"
                     else:
                         notice = f"Click EXIT {remaining} more times to confirm"
-                    print(f"...[Toolbar] {notice}...")
+                    self._announce(notice, source="Toolbar")
                     self._set_ui_notice(notice, duration_s=2.5)
-                    logger.info("Toolbar exit confirmation stage=%s", self._exit_confirm_stage)
                 return
 
             self._exit_confirm_stage = 0
             self._exit_confirm_until = 0.0
             if action == "reset":
                 if self._gen_state != GenState.RESETTING:
-                    print("...[Toolbar] Reset Canvas...")
-                    logger.info("Toolbar reset requested")
+                    self._announce("Reset Canvas", source="Toolbar")
                     self.reset_canvas()
                 return
             elif action == "mask":
                 self.mask_visibility_toggle = not self.mask_visibility_toggle
                 state = "On" if self.mask_visibility_toggle else "Off"
-                print(f"...[Toolbar] Toggle Mask Visibility [{state}]...")
-                logger.info("Mask visibility toggled: %s", state)
+                self._announce(f"Toggle Mask Visibility [{state}]", source="Toolbar")
                 return
             elif action == "save":
                 self._save_image()
@@ -286,6 +303,10 @@ class App:
     def trigger_exit(self):
         """Signal the application to exit."""
         self.exit_triggered = True
+        self._stop_event.set()
+        # Unblock any thread waiting on these events so it can observe stop.
+        self._reset_ack.set()
+        self._gen_done.set()
         logger.info("Exit triggered")
 
     def _cycle_fps(self):
@@ -294,26 +315,24 @@ class App:
         self._fps_index = (self._fps_index + 1) % len(opts)
         self._display_fps = opts[self._fps_index]
         self.animator.set_interp_fps(self._display_fps)
-        print(f"...[Toolbar] Display FPS: {self._display_fps}...")
-        logger.info("Display FPS changed to %s", self._display_fps)
+        self._announce(f"Display FPS: {self._display_fps}", source="Toolbar")
 
     def _save_image(self):
         """Save the current generated image to the working directory."""
         ucfg = self.cfg.ui
-        save_count = 1
-        image_save_name = None
-        for _ in range(ucfg.image_store_limit_count - save_count + 1):
-            save_count += 1
-            image_save_name = f"saved_image_{save_count}.png"
-            if not os.path.isfile(image_save_name):
-                break
-        if save_count >= ucfg.image_store_limit_count + 1:
-            print(f"...[Toolbar] Saving failed - image count ({save_count}) exceeds limit ({ucfg.image_store_limit_count})...")
-            self._set_ui_notice("Save failed: image store limit reached")
-            return
 
-        print(f"...[Toolbar] Saving {image_save_name}...")
-        logger.info("Saving image to %s", image_save_name)
+
+        # Timestamped filename avoids fragile counter math and the missing _1 case.
+        image_save_name = time.strftime("saved_image_%Y%m%d_%H%M%S.png")
+        # If the user spam-saves within the same second, append a short suffix.
+        if os.path.isfile(image_save_name):
+            stem, ext = os.path.splitext(image_save_name)
+            n = 1
+            while os.path.isfile(f"{stem}_{n}{ext}"):
+                n += 1
+            image_save_name = f"{stem}_{n}{ext}"
+
+        self._announce(f"Saving {image_save_name}", source="Toolbar")
         saved_path = os.path.abspath(image_save_name)
         img = cv2.resize(
             rgb_to_bgr(np.array(self.canvas.image)),
@@ -327,8 +346,20 @@ class App:
     def _adjust_brush_thickness(self, delta: int):
         """Increase or decrease brush thickness from toolbar controls."""
         self.canvas.set_brush_thickness(self.canvas.brush_thickness + delta)
-        print(f"...[Toolbar] Brush Thickness: {self.canvas.brush_thickness}...")
-        logger.info("Brush thickness changed to %s", self.canvas.brush_thickness)
+        self._announce(
+            f"Brush Thickness: {self.canvas.brush_thickness}", source="Toolbar",
+        )
+
+    def _announce(self, message: str, source: str = "User"):
+        """Single sink for user-facing actions: prints to stdout and logs at INFO.
+
+        Keeps console output and structured logs in one place so the message
+        can't drift between them and so future routing (e.g., status bar) is
+        a one-line change.
+        """
+        line = f"...[{source}] {message}..."
+        print(line)
+        logger.info("[%s] %s", source, message)
 
     def _set_ui_notice(self, message: str, duration_s: float = 3.0):
         """Display a short-lived status message in the bottom bar."""
@@ -353,8 +384,9 @@ class App:
         self._max_inference_steps = new_max
         self._inference_steps = min(self._inference_steps, self._max_inference_steps)
         self.current_inference_steps = min(self.current_inference_steps, self._max_inference_steps)
-        print(f"...[Toolbar] Max Diffusion Steps: {self._max_inference_steps}...")
-        logger.info("Runtime max diffusion steps changed to %s", self._max_inference_steps)
+        self._announce(
+            f"Max Diffusion Steps: {self._max_inference_steps}", source="Toolbar",
+        )
 
     def _snapshot_state(self) -> AppSnapshot:
         """Capture restorable application state before a user stroke."""
@@ -384,19 +416,17 @@ class App:
     def _undo_last_stroke(self):
         """Undo the most recent stroke by restoring the prior app snapshot."""
         if not self._undo_stack:
-            print("...[Toolbar] Undo unavailable...")
-            logger.info("Undo requested with empty history")
+            self._announce("Undo unavailable", source="Toolbar")
             return
 
         snapshot = self._undo_stack.pop()
-        logger.info("Undo requested")
         if self._gen_state == GenState.GENERATING:
             self._pending_restore = snapshot
             self._gen_state = GenState.RESETTING
             return
 
         self._restore_snapshot(snapshot)
-        print("...[Toolbar] Undo last stroke...")
+        self._announce("Undo last stroke", source="Toolbar")
 
     # -- diffusion thread -----------------------------------------------------
 
@@ -405,176 +435,151 @@ class App:
         cfg = self.cfg
         icfg = cfg.inference
         ucfg = cfg.ui
-        while True:
+        while not self._stop_event.is_set():
             try:
-                if self._gen_state == GenState.READY:
-                    self._gen_state = GenState.GENERATING
-                    self._thread_error = None
-                    self._gen_seq += 1
-                    mask_gray = self.canvas.mask.copy()
-                    nonzero = cv2.findNonZero(mask_gray)
-                    if nonzero is None:
-                        logger.debug("Generation skipped: empty mask")
-                        self._gen_state = GenState.IDLE
-                        time.sleep(0.05)
-                        continue
-                    logger.info(
-                        "Generation cycle #%s starting: steps=%s nonzero_mask=%s",
-                        self._gen_seq,
-                        self._inference_steps,
-                        nonzero is not None,
+                if self._gen_state != GenState.READY:
+                    time.sleep(1)
+                    continue
+
+                self._gen_state = GenState.GENERATING
+                # Note: _thread_error is intentionally NOT cleared here. It is
+                # only cleared on reset/undo so transient pipeline failures
+                # remain visible to the user across subsequent successful runs.
+                self._gen_seq += 1
+                mask_gray = self.canvas.mask.copy()
+
+                plan = decide_crop(
+                    mask_gray, ucfg.image_size,
+                    icfg.crop_pad, icfg.crop_alignment,
+                    icfg.crop_area_threshold, icfg.crop_min_dim,
+                )
+                if plan is None:
+                    logger.debug("Generation skipped: empty mask")
+                    self._gen_state = GenState.IDLE
+                    time.sleep(0.05)
+                    continue
+                logger.info(
+                    "Generation cycle #%s starting: steps=%s use_crop=%s region=%s",
+                    self._gen_seq, self._inference_steps, plan.use_crop, plan.region,
+                )
+
+                init_pil = self.canvas.image
+                control_pil = make_control_image(mask_gray)
+                inference_steps = self._inference_steps
+                self.current_inference_steps = inference_steps
+                kernel = make_dilation_kernel(icfg.mask_dilate)
+
+                def step_cb(s, total_steps, l):
+                    if self._stop_event.is_set():
+                        # Best-effort cancellation: raising here aborts the diffusers loop.
+                        raise _DiffusionCancelled()
+                    if self._gen_state != GenState.RESETTING:
+                        logger.debug("Pipeline step callback: step=%s/%s", s + 1, total_steps)
+                        self.animator.on_step(s, self.current_inference_steps, l)
+                    else:
+                        logger.debug("Skipped step callback due to reset request")
+
+                # Build distance map and inpaint inputs from helpers.
+                dist_inputs = compute_dist_map_inputs(
+                    mask_gray, self._prev_gen_mask, plan, ucfg, kernel,
+                )
+                if dist_inputs is None:
+                    dist_map = None
+                    logger.info("No delta strokes; using global crossfade reveal")
+                else:
+                    dist_map = self.animator.make_dist_map(
+                        dist_inputs.delta_mask, dist_inputs.delta_dilated,
+                        dist_inputs.out_size, dist_inputs.cx, dist_inputs.cy,
                     )
 
-                    # Decide crop region
-                    use_crop = False
-                    cx1 = cy1 = 0
-                    cx2, cy2 = ucfg.image_size
-                    if nonzero is not None:
-                        bx, by, bw, bh = cv2.boundingRect(nonzero)
-                        pad = icfg.crop_pad
-                        align = icfg.crop_alignment
-                        rx1 = max(0, bx - pad)
-                        ry1 = max(0, by - pad)
-                        rx2 = min(ucfg.image_size[0], bx + bw + pad)
-                        ry2 = min(ucfg.image_size[1], by + bh + pad)
-                        rw = (rx2 - rx1) // align * align
-                        rh = (ry2 - ry1) // align * align
-                        rx2 = rx1 + rw
-                        ry2 = ry1 + rh
-                        if rw * rh < int(icfg.crop_area_threshold * ucfg.image_size[0] * ucfg.image_size[1]) and rw >= icfg.crop_min_dim and rh >= icfg.crop_min_dim:
-                            use_crop = True
-                            cx1, cy1, cx2, cy2 = rx1, ry1, rx2, ry2
-                    logger.info("Crop decision: use_crop=%s crop=%s", use_crop, (cx1, cy1, cx2, cy2))
+                ramp_size = (
+                    None if plan.use_crop
+                    else icfg.image_sizes_ramp[self.image_size_index]
+                )
+                inpaint = build_inpaint_inputs(
+                    init_pil, mask_gray, control_pil, plan, kernel,
+                    image_sizes_ramp_size=ramp_size,
+                )
 
-                    init_pil = self.canvas.image
-                    control_np = np.where(mask_gray > 0, np.uint8(255), np.uint8(0))
-                    control_pil = Image.fromarray(gray_to_rgb(control_np))
-                    inference_steps = self._inference_steps
-                    self.current_inference_steps = inference_steps
+                self.animator.prepare_generation(
+                    plan.region if plan.use_crop else None, dist_map,
+                )
 
-                    # Dilate
-                    dil = icfg.mask_dilate * 2 + 1
-                    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (dil, dil))
-                    sx, sy = ucfg.display_scale
+                # Debug artifacts mirror the previous per-branch tags.
+                if plan.use_crop:
+                    cw, ch = inpaint.width, inpaint.height
+                    self.dbg.save_annotated_crop(init_pil, plan.region,
+                        f"steps={inference_steps} size={cw}x{ch}")
+                    self.dbg.save("crop_init", inpaint.init_image)
+                    self.dbg.save("crop_control", inpaint.control_image)
+                    self.dbg.save("crop_mask", inpaint.inpaint_mask)
+                else:
+                    self.dbg.save("full_init", inpaint.init_image)
+                    self.dbg.save("full_control", inpaint.control_image)
+                    self.dbg.save("full_mask", inpaint.inpaint_mask)
 
-                    def step_cb(s, total_steps, l):
-                        if self._gen_state != GenState.RESETTING:
-                            logger.debug("Pipeline step callback: step=%s/%s", s + 1, total_steps)
-                            self.animator.on_step(s, self.current_inference_steps, l)
-                        else:
-                            logger.debug("Skipped step callback due to reset request")
+                gen_start_time = time.time()
+                result = self.pipe.run_inpaint(
+                    inpaint.init_image, inpaint.inpaint_mask, inpaint.control_image,
+                    icfg.prompt, inference_steps,
+                    width=inpaint.width, height=inpaint.height,
+                    step_callback=step_cb,
+                )
 
-                    gen_start_time = time.time()
-
-                    if use_crop:
-                        crop = (cx1, cy1, cx2, cy2)
-                        cw, ch = cx2 - cx1, cy2 - cy1
-                        stroke_crop = mask_gray[cy1:cy2, cx1:cx2]
-                        dil_crop = cv2.dilate(stroke_crop, kernel)
-                        inpaint_mask = Image.fromarray(np.where(dil_crop > 0, np.uint8(255), np.uint8(0)))
-                        px1, py1 = int(cx1 * sx), int(cy1 * sy)
-                        px2, py2 = int(cx2 * sx), int(cy2 * sy)
-                        delta_crop = cv2.subtract(stroke_crop, self._prev_gen_mask[cy1:cy2, cx1:cx2])
-                        delta_count = int(cv2.countNonZero(delta_crop))
-                        logger.info("Generation #%s crop delta pixels=%s", self._gen_seq, delta_count)
-                        if delta_count > 0:
-                            delta_dil_crop = cv2.dilate(delta_crop, kernel)
-                            dist_map = self.animator.make_dist_map(
-                                delta_crop, delta_dil_crop, (px2 - px1, py2 - py1), cw // 2, ch // 2)
-                        else:
-                            # No newly-added strokes: refine with global crossfade.
-                            dist_map = None
-                            logger.info("No delta strokes in crop; using global crossfade reveal")
-                        self.animator.prepare_generation(crop, dist_map)
-                        self.dbg.save_annotated_crop(init_pil, crop,
-                            f"steps={inference_steps} size={cw}x{ch}")
-                        self.dbg.save("crop_init", init_pil.crop(crop))
-                        self.dbg.save("crop_control", control_pil.crop(crop))
-                        self.dbg.save("crop_mask", inpaint_mask)
-                        result_crop = self.pipe.run_inpaint(
-                            init_pil.crop(crop), inpaint_mask,
-                            control_pil.crop(crop),
-                            icfg.prompt, inference_steps, width=cw, height=ch,
-                            step_callback=step_cb,
-                        )
-                        if self._gen_state == GenState.RESETTING:
-                            logger.info("Reset requested during crop generation; skipping commit")
-                            self._reset_ack.clear()
-                            self._gen_done.set()
-                            self._reset_ack.wait()
-                            self._gen_done.clear()
-                            time.sleep(0.05)
-                            continue
-                        self.dbg.save("crop_result", result_crop)
-                        self.canvas.patch_image(crop, result_crop, icfg.crop_feather_px)
-                    else:
-                        image_size = icfg.image_sizes_ramp[self.image_size_index]
-                        dilated_full = cv2.dilate(mask_gray, kernel)
-                        inpaint_mask = Image.fromarray(cv2.resize(
-                            np.where(dilated_full > 0, np.uint8(255), np.uint8(0)),
-                            image_size, interpolation=cv2.INTER_NEAREST))
-                        h_f, w_f = mask_gray.shape
-                        delta_full = cv2.subtract(mask_gray, self._prev_gen_mask)
-                        delta_count = int(cv2.countNonZero(delta_full))
-                        logger.info("Generation #%s full delta pixels=%s", self._gen_seq, delta_count)
-                        if delta_count > 0:
-                            delta_dilated = cv2.dilate(delta_full, kernel)
-                            dist_map = self.animator.make_dist_map(
-                                delta_full, delta_dilated, ucfg.present_size, w_f // 2, h_f // 2)
-                        else:
-                            # No newly-added strokes: refine with global crossfade.
-                            dist_map = None
-                            logger.info("No delta strokes in full frame; using global crossfade reveal")
-                        self.animator.prepare_generation(None, dist_map)
-                        self.dbg.save("full_init", init_pil.resize(image_size))
-                        self.dbg.save("full_control", control_pil.resize(image_size, Image.NEAREST))
-                        self.dbg.save("full_mask", inpaint_mask)
-                        result = self.pipe.run_inpaint(
-                            init_pil.resize(image_size), inpaint_mask,
-                            control_pil.resize(image_size, Image.NEAREST),
-                            icfg.prompt, inference_steps,
-                            width=image_size[0], height=image_size[1],
-                            step_callback=step_cb,
-                        )
-                        if self._gen_state == GenState.RESETTING:
-                            logger.info("Reset requested during full-frame generation; skipping commit")
-                            self._reset_ack.clear()
-                            self._gen_done.set()
-                            self._reset_ack.wait()
-                            self._gen_done.clear()
-                            time.sleep(0.05)
-                            continue
-                        self.dbg.save("full_result", result)
-                        self.canvas.image = result.resize(ucfg.image_size)
-                        self.image_size_index = min(self.image_size_index + 1, self.image_sizes_max_index)
-
-                    final_frame = cv2.resize(
-                        rgb_to_bgr(np.array(self.canvas.image)),
-                        ucfg.present_size, interpolation=cv2.INTER_LINEAR)
-                    generation_duration = time.time() - gen_start_time
-                    logger.info("Generation inference complete in %.3fs; staging outro", generation_duration)
-                    self.animator.start_outro(final_frame, generation_duration)
-                    self.animator.wait_for_outro()
-                    logger.info("Outro completed")
-                    self._gen_state = GenState.READY
-                    self._gen_count += 1
-                    self._prev_gen_mask = mask_gray.copy()
-
-                    # Signal the display loop and wait for it to acknowledge
+                if self._gen_state == GenState.RESETTING:
+                    logger.info("Reset requested during generation; skipping commit")
                     self._reset_ack.clear()
                     self._gen_done.set()
                     self._reset_ack.wait()
                     self._gen_done.clear()
+                    time.sleep(0.05)
+                    continue
 
-                    self._inference_steps = min(
-                        self._inference_steps + icfg.rate_inference_steps_change,
-                        self._max_inference_steps)
-                    time.sleep(0.1)
+                if plan.use_crop:
+                    self.dbg.save("crop_result", result)
+                    self.canvas.patch_image(plan.region, result, icfg.crop_feather_px)
                 else:
-                    time.sleep(1)
+                    self.dbg.save("full_result", result)
+                    self.canvas.image = result.resize(ucfg.image_size)
+                    self.image_size_index = min(
+                        self.image_size_index + 1, self.image_sizes_max_index,
+                    )
+
+                final_frame = cv2.resize(
+                    rgb_to_bgr(np.array(self.canvas.image)),
+                    ucfg.present_size, interpolation=cv2.INTER_LINEAR)
+                generation_duration = time.time() - gen_start_time
+                logger.info("Generation inference complete in %.3fs; staging outro", generation_duration)
+                self.animator.start_outro(final_frame, generation_duration)
+                self.animator.wait_for_outro()
+                logger.info("Outro completed")
+                self._gen_state = GenState.READY
+                self._gen_count += 1
+                self._prev_gen_mask = mask_gray.copy()
+
+                # Signal the display loop and wait for it to acknowledge
+                self._reset_ack.clear()
+                self._gen_done.set()
+                self._reset_ack.wait()
+                self._gen_done.clear()
+
+                self._inference_steps = min(
+                    self._inference_steps + icfg.rate_inference_steps_change,
+                    self._max_inference_steps)
+                self._consecutive_failures = 0
+                time.sleep(0.1)
+            except _DiffusionCancelled:
+                logger.info("Diffusion cancelled by stop event")
+                break
             except Exception as exc:
                 logger.exception("Unhandled exception in diffusion thread")
+                self._consecutive_failures += 1
                 self._thread_error = str(exc)
+                if self._consecutive_failures >= self._max_consecutive_failures:
+                    self._set_ui_notice(
+                        f"Pipeline failing repeatedly ({self._consecutive_failures}x); see logs",
+                        duration_s=10.0,
+                    )
                 if self._gen_state == GenState.GENERATING:
                     self._gen_state = GenState.READY
                 if self._gen_state == GenState.RESETTING:
@@ -582,7 +587,9 @@ class App:
                 else:
                     self._gen_done.clear()
                 self._reset_ack.set()
-                time.sleep(0.25)
+                # Exponential backoff capped at 4s.
+                backoff = min(0.25 * (2 ** (self._consecutive_failures - 1)), 4.0)
+                self._stop_event.wait(timeout=backoff)
 
     # -- display loop ---------------------------------------------------------
 
@@ -591,7 +598,10 @@ class App:
         cfg = self.cfg
         ucfg = cfg.ui
         icfg = cfg.inference
-        threading.Thread(target=self.async_diffusion, daemon=True).start()
+        self._diffusion_thread = threading.Thread(
+            target=self.async_diffusion, name="diffusion", daemon=True,
+        )
+        self._diffusion_thread.start()
 
         while True:
             if self.canvas.commit_active_to_mask():
@@ -674,7 +684,13 @@ class App:
                 break
             time.sleep(1.0 / self._display_fps)
 
+        self._stop_event.set()
         self.animator.stop()
+        if self._diffusion_thread is not None:
+            logger.info("Waiting for diffusion thread to stop")
+            self._diffusion_thread.join(timeout=2.0)
+            if self._diffusion_thread.is_alive():
+                logger.warning("Diffusion thread did not stop within timeout")
         logger.info("Application shutdown")
         cv2.destroyAllWindows()
 

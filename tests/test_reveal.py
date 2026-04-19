@@ -180,3 +180,70 @@ def test_outro_duration_clamps_to_max():
 
 def test_outro_duration_zero_generation_returns_min():
     assert compute_outro_duration(0.0, 0.5, 1.0, 3.0) == pytest.approx(1.0)
+
+
+# -- additional edge cases ---------------------------------------------------
+
+def test_compute_reveal_large_alpha_full_reveal():
+    """When alpha >> dist, entire map should be fully revealed."""
+    dist = np.full((16, 16), 0.5, dtype=np.float32)
+    result = compute_reveal(dist, alpha=2.0, edge=0.12)
+    assert np.all(result == 1.0)
+
+
+def test_build_dist_map_empty_dilated_mask():
+    """When the dilated mask is all zeros, outside pixels should be 2.0."""
+    stroke = np.zeros((32, 32), dtype=np.uint8)
+    dilated = np.zeros((32, 32), dtype=np.uint8)
+    dist = build_dist_map(stroke, dilated, (32, 32), 16, 16,
+                          reveal_mode=1, stochastic_noise_strength=0.0)
+    assert np.all(dist == pytest.approx(2.0))
+
+
+def test_build_dist_map_mode_3_cellular():
+    stroke, dilated = _make_stroke_and_dilated()
+    dist = build_dist_map(stroke, dilated, (64, 64), 32, 32,
+                          reveal_mode=3, stochastic_noise_strength=0.3)
+    # Should still be valid float32 in expected range
+    assert dist.dtype == np.float32
+    assert dist[0, 0] == pytest.approx(2.0)  # outside
+    assert dist[32, 32] < 0.5  # near stroke
+
+
+def test_build_dist_map_mode_4_shards():
+    stroke, dilated = _make_stroke_and_dilated()
+    dist = build_dist_map(stroke, dilated, (64, 64), 32, 32,
+                          reveal_mode=4, stochastic_noise_strength=0.3)
+    assert dist.dtype == np.float32
+    assert dist[0, 0] == pytest.approx(2.0)
+
+
+def test_make_stochastic_noise_dispatches_correctly():
+    from reveal import make_stochastic_noise
+    # mode 2 → fractal
+    n2 = make_stochastic_noise(32, 32, 16, 16, reveal_mode=2)
+    assert n2.shape == (32, 32)
+    # mode 3 → cellular
+    n3 = make_stochastic_noise(32, 32, 16, 16, reveal_mode=3)
+    assert n3.shape == (32, 32)
+    # mode 4 → shards
+    n4 = make_stochastic_noise(32, 32, 16, 16, reveal_mode=4)
+    assert n4.shape == (32, 32)
+    # mode 1 → zeros (smooth mode, no noise)
+    n1 = make_stochastic_noise(32, 32, 16, 16, reveal_mode=1)
+    assert np.all(n1 == 0.0)
+
+
+def test_cellular_noise_small_dimensions():
+    """Cellular noise should work on very small images."""
+    noise = make_cellular_noise(4, 4, n_cells=3)
+    assert noise.shape == (4, 4)
+    assert noise.min() >= -1.0
+    assert noise.max() <= 1.0
+
+
+def test_fractal_noise_constant_input():
+    """Fractal noise on a 2×2 grid should not crash."""
+    noise = make_fractal_noise(2, 2)
+    assert noise.shape == (2, 2)
+    assert noise.dtype == np.float32

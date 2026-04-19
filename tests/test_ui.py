@@ -376,3 +376,73 @@ def test_compose_frame_with_ui_notice():
     status_y = 40 + 512 + 6
     status_region = result[status_y:status_y + 16, 12:524]
     assert status_region.sum() > 0
+
+
+def test_compose_frame_with_thread_error_shows_red_badge():
+    """Thread error status should render a red ERR badge in the status bar."""
+    cfg = UIConfig(present_size=(512, 512), toolbar_height=28, progress_bar_height=6)
+    ui = make_ui(cfg)
+    canvas_frame = np.zeros((512, 512, 3), dtype=np.uint8)
+    mask_active = np.zeros((512, 512), dtype=np.uint8)
+    mask_present = np.zeros((512, 512, 3), dtype=np.uint8)
+    status = StatusInfo(
+        quality=0,
+        quality_min=2,
+        quality_max=18,
+        gen_count=0,
+        display_fps=60,
+        brush_thickness=3,
+        thread_error="Simulated pipeline failure",
+    )
+
+    result = ui.compose_frame(
+        canvas_frame, mask_active, mask_present,
+        show_mask=False, has_active_strokes=False,
+        generation_progress=0.0, is_generating=False,
+        button_states={},
+        status=status,
+    )
+    status_y = 40 + 512 + 6
+    # The ERR badge area (left side of status bar) should contain red pixels (BGR: 50,50,220)
+    badge_region = result[status_y:status_y + 14, 14:44]
+    # Red channel (BGR index 2) should dominate in the badge region
+    assert badge_region[:, :, 2].max() >= 200, "ERR badge should contain red fill"
+
+
+def test_thread_error_takes_precedence_over_ui_notice():
+    """When both thread_error and ui_notice are set, error should be shown."""
+    cfg = UIConfig(present_size=(512, 512), toolbar_height=28, progress_bar_height=6)
+    ui = make_ui(cfg)
+    canvas_frame = np.zeros((512, 512, 3), dtype=np.uint8)
+    mask_active = np.zeros((512, 512), dtype=np.uint8)
+    mask_present = np.zeros((512, 512, 3), dtype=np.uint8)
+    status_with_both = StatusInfo(
+        quality=0, quality_min=2, quality_max=18, gen_count=0,
+        display_fps=60, brush_thickness=3,
+        thread_error="error msg",
+        ui_notice="notice msg",
+    )
+    status_notice_only = StatusInfo(
+        quality=0, quality_min=2, quality_max=18, gen_count=0,
+        display_fps=60, brush_thickness=3,
+        ui_notice="notice msg",
+    )
+    result_both = ui.compose_frame(
+        canvas_frame, mask_active, mask_present,
+        show_mask=False, has_active_strokes=False,
+        generation_progress=0.0, is_generating=False,
+        button_states={}, status=status_with_both,
+    )
+    result_notice = ui.compose_frame(
+        canvas_frame, mask_active, mask_present,
+        show_mask=False, has_active_strokes=False,
+        generation_progress=0.0, is_generating=False,
+        button_states={}, status=status_notice_only,
+    )
+    status_y = 40 + 512 + 6
+    badge_area_both = result_both[status_y:status_y + 14, 14:44]
+    badge_area_notice = result_notice[status_y:status_y + 14, 14:44]
+    # With both set, error badge should have more red than notice-only
+    red_both = int(badge_area_both[:, :, 2].sum())
+    red_notice = int(badge_area_notice[:, :, 2].sum())
+    assert red_both > red_notice

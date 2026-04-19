@@ -3,56 +3,9 @@
 import numpy as np
 import cv2
 import pytest
-import torch
-from PIL import Image
 
 from config import AppConfig, UIConfig, InferenceConfig, RevealConfig
 from main import App, GenState
-
-
-class _DecodeResult:
-    def __init__(self, sample):
-        self.sample = sample
-
-
-class DummyTAESD:
-    def decode(self, latents_tensor):
-        return _DecodeResult(latents_tensor.clamp(0, 1))
-
-    def eval(self):
-        return self
-
-    def to(self, *args, **kwargs):
-        return self
-
-    def parameters(self):
-        return iter([torch.tensor([1.0])])
-
-
-class MockPipeline:
-    def __init__(self, cfg):
-        self.cfg = cfg
-        self._taesd = DummyTAESD()
-
-    @property
-    def taesd(self):
-        return self._taesd
-
-    @property
-    def taesd_device(self):
-        return torch.device("cpu")
-
-    def run_inpaint(self, *args, **kwargs):
-        width = kwargs.get("width", 64)
-        height = kwargs.get("height", 64)
-        return Image.new("RGB", (width, height), (128, 128, 128))
-
-
-class SlowPipeline(MockPipeline):
-    def run_inpaint(self, *args, **kwargs):
-        import time
-        time.sleep(0.2)
-        return super().run_inpaint(*args, **kwargs)
 
 
 def _make_cfg():
@@ -63,16 +16,9 @@ def _make_cfg():
     )
 
 
-def _patch_cv_window(monkeypatch):
-    monkeypatch.setattr("cv2.namedWindow", lambda *a, **kw: None)
-    monkeypatch.setattr("cv2.moveWindow", lambda *a, **kw: None)
-    monkeypatch.setattr("cv2.setMouseCallback", lambda *a, **kw: None)
-
-
 @pytest.fixture
-def app(monkeypatch):
-    monkeypatch.setattr("main.DiffusionPipeline", MockPipeline)
-    _patch_cv_window(monkeypatch)
+def app(monkeypatch, patch_cv_window, mock_pipeline_cls):
+    monkeypatch.setattr("main.DiffusionPipeline", mock_pipeline_cls)
     return App(_make_cfg())
 
 
@@ -94,9 +40,8 @@ def test_undo_with_empty_history_is_noop(app):
     assert np.array_equal(before, app.canvas.mask)
 
 
-def test_undo_during_generation_restores_after_reset(monkeypatch):
-    monkeypatch.setattr("main.DiffusionPipeline", SlowPipeline)
-    _patch_cv_window(monkeypatch)
+def test_undo_during_generation_restores_after_reset(monkeypatch, patch_cv_window, slow_pipeline_cls):
+    monkeypatch.setattr("main.DiffusionPipeline", slow_pipeline_cls)
     app = App(_make_cfg())
 
     app.mouse_callback(cv2.EVENT_LBUTTONDOWN, 20, 50, 0, None)
@@ -132,6 +77,10 @@ def test_undo_during_generation_restores_after_reset(monkeypatch):
 
     assert not np.any(app.canvas.mask)
     assert app._gen_state == GenState.IDLE
+
+    # Stop the thread to prevent it leaking into subsequent tests.
+    app._stop_event.set()
+    t.join(timeout=2)
 
 
 @pytest.mark.parametrize("key_code", [26, ord("z"), ord("Z"), ord("u"), ord("U")])

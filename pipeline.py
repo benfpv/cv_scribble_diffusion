@@ -47,6 +47,10 @@ class DiffusionPipeline:
         if self._use_gpu:
             self._pipe.enable_sequential_cpu_offload()
 
+        # The bundled SD safety checker is disabled for this local-use creative
+        # tool: latency matters and false positives during interactive scribble
+        # sessions interrupt the experience. Reinstate it before any deployment
+        # to a public-facing surface.
         self._pipe.safety_checker = None
         self._pipe.scheduler = UniPCMultistepScheduler.from_config(
             self._pipe.scheduler.config

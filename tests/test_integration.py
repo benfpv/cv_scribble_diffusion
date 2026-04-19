@@ -1,91 +1,17 @@
 """Integration tests for App lifecycle, GenState transitions, and thread error handling.
 
-These tests mock the DiffusionPipeline and OpenCV window to run without GPU or display.
+These tests use the mock pipelines from conftest.py to run without GPU or display.
 """
 
 import numpy as np
 import threading
 import time
 import pytest
-from PIL import Image
 
 import cv2
-import torch
 
 from config import AppConfig, UIConfig, InferenceConfig, RevealConfig
 from main import App, GenState
-
-
-# -- helpers -----------------------------------------------------------------
-
-class _DecodeResult:
-    def __init__(self, sample):
-        self.sample = sample
-
-
-class DummyTAESD:
-    """Minimal TAESD stand-in that returns the input tensor unchanged."""
-
-    def decode(self, latents_tensor):
-        return _DecodeResult(latents_tensor.clamp(0, 1))
-
-    def eval(self):
-        return self
-
-    def to(self, *args, **kwargs):
-        return self
-
-    def parameters(self):
-        return iter([torch.tensor([1.0])])
-
-
-class MockPipeline:
-    """Stand-in for DiffusionPipeline that produces dummy images without GPU."""
-
-    def __init__(self, cfg):
-        self.cfg = cfg
-        self._taesd = DummyTAESD()
-
-    @property
-    def taesd(self):
-        return self._taesd
-
-    @property
-    def taesd_device(self):
-        return torch.device("cpu")
-
-    def run_inpaint(self, init_image, mask_image, control_image,
-                    prompt, num_inference_steps, width, height,
-                    step_callback=None):
-        for i in range(num_inference_steps):
-            if step_callback:
-                latents = torch.rand(1, 3, height // 8, width // 8)
-                step_callback(i, num_inference_steps, latents)
-        return Image.new("RGB", (width, height), (128, 128, 128))
-
-
-class FailingPipeline(MockPipeline):
-    """Pipeline that raises on the first call to run_inpaint, then succeeds."""
-
-    def __init__(self, cfg):
-        super().__init__(cfg)
-        self._fail_count = 1
-
-    def run_inpaint(self, *args, **kwargs):
-        if self._fail_count > 0:
-            self._fail_count -= 1
-            raise RuntimeError("Simulated pipeline failure")
-        return super().run_inpaint(*args, **kwargs)
-
-
-class SlowPipeline(MockPipeline):
-    """Pipeline that sleeps to make reset-during-generation reproducible."""
-
-    def run_inpaint(self, *args, **kwargs):
-        time.sleep(0.2)
-        width = kwargs.get("width", 64)
-        height = kwargs.get("height", 64)
-        return Image.new("RGB", (width, height), (255, 255, 255))
 
 
 def _make_cfg():
@@ -102,30 +28,22 @@ def _make_cfg():
     )
 
 
-def _patch_cv_window(monkeypatch):
-    monkeypatch.setattr("cv2.namedWindow", lambda *a, **kw: None)
-    monkeypatch.setattr("cv2.moveWindow", lambda *a, **kw: None)
-    monkeypatch.setattr("cv2.setMouseCallback", lambda *a, **kw: None)
-
-
 @pytest.fixture
-def app(monkeypatch):
+def app(monkeypatch, patch_cv_window, mock_pipeline_cls):
     """Create an App with mocked pipeline and OpenCV window."""
-    monkeypatch.setattr("main.DiffusionPipeline", MockPipeline)
-    _patch_cv_window(monkeypatch)
+    monkeypatch.setattr("main.DiffusionPipeline", mock_pipeline_cls)
     return App(_make_cfg())
 
 
 @pytest.fixture
-def failing_app(monkeypatch):
+def failing_app(monkeypatch, patch_cv_window, failing_pipeline_cls):
     """Create an App whose pipeline fails on first generation."""
-    monkeypatch.setattr("main.DiffusionPipeline", FailingPipeline)
-    _patch_cv_window(monkeypatch)
+    monkeypatch.setattr("main.DiffusionPipeline", failing_pipeline_cls)
     return App(_make_cfg())
 
 
 def _run_one_generation(app, timeout=10):
-    """Start async_diffusion as a daemon, wait for one cycle, then return."""
+    """Start async_diffusion as a daemon, wait for one cycle, then stop the thread."""
     done = threading.Event()
     original_set = app._gen_done.set
 
@@ -151,6 +69,10 @@ def _run_one_generation(app, timeout=10):
     app._reset_ack.set()
     # Allow thread to complete step ramp and reach its sleep
     time.sleep(0.15)
+
+    # Stop the thread to prevent it leaking into subsequent tests.
+    app._stop_event.set()
+    t.join(timeout=2)
 
 
 # -- GenState transitions ----------------------------------------------------
@@ -190,15 +112,17 @@ def test_stroke_preserved_when_cursor_leaves_canvas(app):
     app.mouse_callback(cv2.EVENT_LBUTTONDOWN, 20, 50, 0, None)
     app.mouse_callback(cv2.EVENT_MOUSEMOVE, 30, 60, 0, None)
     
-    # Verify pixels were committed to the mask.
+    # Commit active strokes so they land in the persistent mask.
+    app.canvas.commit_active_to_mask()
     mask_before = app.canvas.mask.copy()
+    assert np.count_nonzero(mask_before) > 0, "Stroke should be in persistent mask"
     
     # Move outside canvas bounds—stroke should be committed, not discarded.
     app.mouse_callback(cv2.EVENT_MOUSEMOVE, 5, 50, 0, None)
     
-    # Pixels drawn before leaving canvas should be preserved.
-    assert np.any(app.canvas.mask > 0), "Stroke should be preserved in persistent mask"
-    
+    # Pixels drawn before leaving canvas must still be present.
+    assert np.array_equal(app.canvas.mask >= mask_before, np.ones_like(mask_before, dtype=bool)), \
+        "Leaving canvas must not erase previously committed strokes"
 
 def test_exit_requires_confirmation_click(app, monkeypatch):
     monkeypatch.setattr(app.ui, "hit_test", lambda _x, _y: "exit")
@@ -249,7 +173,8 @@ def test_save_sets_ui_notice_with_path(app, monkeypatch):
 
     assert notice is not None
     assert "Saved snapshot:" in notice
-    assert "saved_image_2.png" in notice
+    assert "saved_image_" in notice
+    assert notice.endswith(".png")
 
 
 def test_reset_from_idle_stays_idle(app):
@@ -291,14 +216,22 @@ def test_thread_error_recorded_on_pipeline_failure(failing_app):
     assert app._gen_state == GenState.READY
 
 
-def test_thread_error_cleared_on_successful_generation(app):
-    """A successful generation clears any previous thread error."""
+def test_thread_error_persists_across_successful_generations(app):
+    """Thread errors are sticky: only reset/undo clears them so transient
+    failures stay visible to the user across subsequent successful runs."""
     app._thread_error = "stale error"
     app.canvas.mask[30:35, 30:35] = 150
     app._gen_state = GenState.READY
 
     _run_one_generation(app)
 
+    assert app._thread_error == "stale error"
+
+
+def test_thread_error_cleared_by_reset(app):
+    """Resetting the canvas clears any sticky thread error."""
+    app._thread_error = "stale error"
+    app.reset_canvas()
     assert app._thread_error is None
 
 
@@ -314,7 +247,8 @@ def test_generation_produces_nonzero_frame(app):
     assert app._gen_count >= 1
     frame = app.animator.get_display_frame()
     assert frame.shape == (64, 64, 3)
-    assert np.any(frame > 0)
+    # MockPipeline produces (128,128,128) fill—at least some pixels should reflect that
+    assert frame.mean() > 10
 
 
 def test_inference_steps_ramp_after_generation(app):
@@ -354,10 +288,9 @@ def test_canvas_clamps_out_of_bounds_coords(app):
     assert app.canvas.drawing is False
 
 
-def test_reset_during_generation_does_not_commit_stale_result(monkeypatch):
+def test_reset_during_generation_does_not_commit_stale_result(monkeypatch, patch_cv_window, slow_pipeline_cls):
     """Resetting mid-generation should keep the reset canvas, not stale output."""
-    monkeypatch.setattr("main.DiffusionPipeline", SlowPipeline)
-    _patch_cv_window(monkeypatch)
+    monkeypatch.setattr("main.DiffusionPipeline", slow_pipeline_cls)
     app = App(_make_cfg())
 
     app.canvas.mask[20:40, 20:40] = 150
@@ -382,4 +315,213 @@ def test_reset_during_generation_does_not_commit_stale_result(monkeypatch):
             break
         time.sleep(0.01)
 
-    assert np.all(np.array(app.canvas.image) == 0)
+    # Canvas should be fully blank after reset—no stale pipeline output.
+    assert np.all(np.array(app.canvas.image) == 0), \
+        "Canvas image must be blank after reset during generation"
+    assert np.all(app.canvas.mask == 0), \
+        "Canvas mask must be blank after reset during generation"
+
+    # Stop the thread to prevent it leaking into subsequent tests.
+    app._stop_event.set()
+    t.join(timeout=2)
+
+
+# -- backoff and consecutive failures ----------------------------------------
+
+def test_consecutive_failure_increments_and_records_error(
+    monkeypatch, patch_cv_window, always_failing_pipeline_cls,
+):
+    """AlwaysFailingPipeline should increment _consecutive_failures each cycle."""
+    monkeypatch.setattr("main.DiffusionPipeline", always_failing_pipeline_cls)
+    app = App(_make_cfg())
+    app.canvas.mask[20:30, 20:30] = 150
+    app._gen_state = GenState.READY
+    app._reset_ack.set()
+
+    t = threading.Thread(target=app.async_diffusion, daemon=True)
+    t.start()
+
+    # Wait until at least 3 failures accumulate
+    deadline = time.time() + 10
+    while time.time() < deadline and app._consecutive_failures < 3:
+        time.sleep(0.05)
+
+    app._stop_event.set()
+    t.join(timeout=2)
+
+    assert app._consecutive_failures >= 3
+    assert app._thread_error is not None
+    assert "Persistent simulated failure" in app._thread_error
+
+
+def test_consecutive_failure_triggers_ui_notice_after_threshold(
+    monkeypatch, patch_cv_window, always_failing_pipeline_cls,
+):
+    """After _max_consecutive_failures, a UI notice should be set."""
+    monkeypatch.setattr("main.DiffusionPipeline", always_failing_pipeline_cls)
+    app = App(_make_cfg())
+    app._max_consecutive_failures = 2  # lower threshold for faster test
+    app.canvas.mask[20:30, 20:30] = 150
+    app._gen_state = GenState.READY
+    app._reset_ack.set()
+
+    t = threading.Thread(target=app.async_diffusion, daemon=True)
+    t.start()
+
+    deadline = time.time() + 10
+    while time.time() < deadline and app._consecutive_failures < 2:
+        time.sleep(0.05)
+
+    app._stop_event.set()
+    t.join(timeout=2)
+
+    assert app._consecutive_failures >= 2
+    notice = app._ui_notice
+    assert notice is not None
+    assert "failing repeatedly" in notice
+
+
+# -- FPS cycling -------------------------------------------------------------
+
+def test_cycle_fps_wraps_around(app):
+    initial_fps = app._display_fps
+    opts = app.cfg.ui.display_fps_options
+    # Cycle through all options to wrap back
+    for _ in range(len(opts)):
+        app._cycle_fps()
+    assert app._display_fps == initial_fps
+
+
+def test_cycle_fps_advances(app):
+    opts = app.cfg.ui.display_fps_options
+    app._cycle_fps()
+    assert app._display_fps == opts[app._fps_index]
+
+
+# -- UI notice expiry --------------------------------------------------------
+
+def test_ui_notice_expires_after_duration(app):
+    app._set_ui_notice("test notice", duration_s=0.1)
+    assert app._current_ui_notice() == "test notice"
+    time.sleep(0.15)
+    assert app._current_ui_notice() is None
+
+
+def test_ui_notice_clears_fields_on_expiry(app):
+    app._set_ui_notice("test notice", duration_s=0.1)
+    time.sleep(0.15)
+    app._current_ui_notice()
+    assert app._ui_notice is None
+    assert app._ui_notice_until == 0.0
+
+
+# -- save failure path -------------------------------------------------------
+
+def test_save_failure_sets_notice(app, monkeypatch):
+    monkeypatch.setattr("os.path.isfile", lambda _p: False)
+    monkeypatch.setattr("cv2.imwrite", lambda _p, _img: False)
+
+    app._save_image()
+    notice = app._current_ui_notice()
+    assert notice is not None
+    assert "Save failed" in notice
+
+
+def test_save_duplicate_filename_appends_suffix(app, monkeypatch):
+    """When the timestamped file exists, a _1 suffix is appended."""
+    call_count = 0
+
+    def fake_isfile(path):
+        nonlocal call_count
+        call_count += 1
+        # First call: file exists. Second call (with _1): doesn't exist.
+        return call_count <= 1
+
+    monkeypatch.setattr("os.path.isfile", fake_isfile)
+    written_paths = []
+    monkeypatch.setattr("cv2.imwrite", lambda p, _img: (written_paths.append(p), True)[-1])
+
+    app._save_image()
+    assert len(written_paths) == 1
+    assert "_1.png" in written_paths[0]
+
+
+# -- adjust max inference steps (increase) -----------------------------------
+
+def test_adjust_max_inference_steps_increase(app):
+    original_max = app._max_inference_steps
+    app._adjust_max_inference_steps(2)
+    assert app._max_inference_steps == original_max + 2
+
+
+def test_adjust_max_inference_steps_caps_at_runtime_ceiling(app):
+    """Runtime cap is max(cfg.max_inference_steps, 30)."""
+    runtime_cap = max(app.cfg.inference.max_inference_steps, 30)
+    app._adjust_max_inference_steps(999)
+    assert app._max_inference_steps == runtime_cap
+
+
+# -- trigger_exit unblocks events -------------------------------------------
+
+def test_trigger_exit_sets_stop_event(app):
+    app.trigger_exit()
+    assert app.exit_triggered is True
+    assert app._stop_event.is_set()
+
+
+def test_trigger_exit_unblocks_reset_ack(app):
+    app._reset_ack.clear()
+    app.trigger_exit()
+    assert app._reset_ack.is_set()
+
+
+def test_trigger_exit_unblocks_gen_done(app):
+    app._gen_done.clear()
+    app.trigger_exit()
+    assert app._gen_done.is_set()
+
+
+# -- undo clears thread error -----------------------------------------------
+
+def test_undo_clears_thread_error(app):
+    """Undo (via _restore_snapshot) should clear sticky thread errors."""
+    app.mouse_callback(cv2.EVENT_LBUTTONDOWN, 20, 50, 0, None)
+    app.canvas.commit_active_to_mask()
+    app.mouse_callback(cv2.EVENT_LBUTTONUP, 20, 50, 0, None)
+    app._thread_error = "some error"
+    app._undo_last_stroke()
+    assert app._thread_error is None
+
+
+# -- _DiffusionCancelled during generation -----------------------------------
+
+def test_stop_event_during_pipeline_cancels_cleanly(
+    monkeypatch, patch_cv_window, mock_pipeline_cls,
+):
+    """Setting _stop_event mid-pipeline should raise _DiffusionCancelled and exit."""
+    from conftest import MockPipeline
+
+    class StopDuringStepPipeline(MockPipeline):
+        def run_inpaint(self_pipe, *args, **kwargs):
+            step_callback = kwargs.get("step_callback")
+            if step_callback:
+                import torch
+                # Set stop event before the first step callback
+                app._stop_event.set()
+                step_callback(0, 2, torch.rand(1, 3, 8, 8))
+            from PIL import Image
+            return Image.new("RGB", (64, 64), (128, 128, 128))
+
+    monkeypatch.setattr("main.DiffusionPipeline", StopDuringStepPipeline)
+    app = App(_make_cfg())
+    app.canvas.mask[20:30, 20:30] = 150
+    app._gen_state = GenState.READY
+    app._reset_ack.set()
+
+    t = threading.Thread(target=app.async_diffusion, daemon=True)
+    t.start()
+    t.join(timeout=5)
+
+    assert not t.is_alive(), "Thread should exit after _DiffusionCancelled"
+    # No error should be recorded — this is a clean cancellation
+    assert app._thread_error is None

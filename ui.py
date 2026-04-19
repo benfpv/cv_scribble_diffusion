@@ -237,11 +237,23 @@ class UIOverlay:
         color = (152, 152, 152)
         text_y = y_top + 12
 
-        # Thread error takes precedence over normal status
+        # Thread error takes precedence over normal status. A small filled
+        # "ERR" badge is rendered on the left so the error stands out from
+        # the regular metric strip even at small font sizes.
         if status.thread_error:
             error_color = (50, 50, 220)  # red in BGR
-            error_text = f"Error: {status.thread_error[:60]}"
-            cv2.putText(frame, error_text, (x_off + 2, text_y),
+            badge_w = 30
+            badge_h = 12
+            badge_x1 = x_off + 2
+            badge_y1 = text_y - badge_h + 2
+            badge_x2 = badge_x1 + badge_w
+            badge_y2 = badge_y1 + badge_h
+            cv2.rectangle(frame, (badge_x1, badge_y1), (badge_x2, badge_y2),
+                          error_color, -1)
+            cv2.putText(frame, "ERR", (badge_x1 + 3, badge_y2 - 3),
+                        font, scale, (255, 255, 255), thickness, cv2.LINE_AA)
+            error_text = status.thread_error[:80]
+            cv2.putText(frame, error_text, (badge_x2 + 6, text_y),
                         font, scale, error_color, thickness, cv2.LINE_AA)
             return
 
