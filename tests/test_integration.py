@@ -160,6 +160,18 @@ def test_adjust_max_inference_steps_clamps_runtime_state(app):
     assert app.current_inference_steps == app._max_inference_steps
 
 
+def test_ui_generation_progress_is_zero_when_idle(app):
+    app._gen_state = GenState.IDLE
+    app.animator._generation_progress = 1.0
+    assert app._ui_generation_progress() == 0.0
+
+
+def test_ui_generation_progress_clamps_when_active(app):
+    app._gen_state = GenState.READY
+    app.animator._generation_progress = 1.7
+    assert app._ui_generation_progress() == 1.0
+
+
 def test_save_sets_ui_notice_with_path(app, monkeypatch):
     monkeypatch.setattr("os.path.isfile", lambda _p: False)
     monkeypatch.setattr("cv2.imwrite", lambda _p, _img: True)

@@ -371,6 +371,17 @@ class App:
         self._ui_notice_until = 0.0
         return None
 
+    def _ui_generation_progress(self) -> float:
+        """Progress value for the UI progress bar.
+
+        Keep the no-flicker behavior between back-to-back READY/GENERATING
+        cycles, but force a clear idle bar when no generation is requested.
+        """
+        progress = self.animator.generation_progress
+        if self._gen_state == GenState.IDLE:
+            return 0.0
+        return max(0.0, min(progress, 1.0))
+
     def _adjust_max_inference_steps(self, delta: int):
         """Adjust the runtime max number of diffusion steps."""
         icfg = self.cfg.inference
@@ -666,7 +677,7 @@ class App:
                 self.canvas.mask_present,
                 self.mask_visibility_toggle,
                 self.canvas.has_active_strokes,
-                self.animator.generation_progress,
+                self._ui_generation_progress(),
                 button_states,
                 button_labels,
                 status=status,

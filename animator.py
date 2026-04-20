@@ -84,7 +84,8 @@ class Animator:
 
     @property
     def generation_progress(self) -> float:
-        return self._generation_progress
+        with self._frame_lock:
+            return self._generation_progress
 
     def reset(self):
         """Reset all animation state for a fresh generation cycle."""
@@ -136,9 +137,9 @@ class Animator:
         self._step_wall_ts = now
 
         raw_alpha = (step + 1) / max(total_steps, 1)
-        self._generation_progress = raw_alpha
 
         with self._frame_lock:
+            self._generation_progress = raw_alpha
             crop_region = self._crop_region
             has_dist_map = self._dist_map_norm is not None
 
