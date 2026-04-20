@@ -92,7 +92,7 @@ def test_compose_frame_shape():
     result = ui.compose_frame(
         canvas_frame, mask_active, mask_present,
         show_mask=True, has_active_strokes=False,
-        generation_progress=0.0, is_generating=False,
+        generation_progress=0.0,
         button_states={},
     )
     # h = 28 + 12 + 512 + 12 + 6 + 16 = 586, w = 12 + 512 + 12 = 536
@@ -109,7 +109,7 @@ def test_compose_frame_no_toolbar():
     result = ui.compose_frame(
         canvas_frame, mask_active, mask_present,
         show_mask=False, has_active_strokes=False,
-        generation_progress=0.0, is_generating=False,
+        generation_progress=0.0,
         button_states={},
     )
     # h = 0 + 12 + 512 + 12 + 6 + 16 = 558, w = 536
@@ -118,7 +118,7 @@ def test_compose_frame_no_toolbar():
 
 # -- progress bar fill -------------------------------------------------------
 
-def test_progress_bar_fills_during_generation():
+def test_progress_bar_fills_with_progress_value():
     cfg = UIConfig(present_size=(512, 512), toolbar_height=28, progress_bar_height=6)
     ui = make_ui(cfg)
     canvas_frame = np.zeros((512, 512, 3), dtype=np.uint8)
@@ -128,7 +128,7 @@ def test_progress_bar_fills_during_generation():
     result = ui.compose_frame(
         canvas_frame, mask_active, mask_present,
         show_mask=False, has_active_strokes=False,
-        generation_progress=0.5, is_generating=True,
+        generation_progress=0.5,
         button_states={},
     )
     margin = cfg.canvas_margin  # 12
@@ -140,7 +140,8 @@ def test_progress_bar_fills_during_generation():
     assert int(left_pixel.sum()) > int(right_pixel.sum())
 
 
-def test_progress_bar_empty_when_not_generating():
+def test_progress_bar_empty_when_progress_zero():
+    """Bar is empty only when progress is 0 (truly idle, before first cycle)."""
     cfg = UIConfig(present_size=(512, 512), toolbar_height=28, progress_bar_height=6)
     ui = make_ui(cfg)
     canvas_frame = np.zeros((512, 512, 3), dtype=np.uint8)
@@ -150,7 +151,7 @@ def test_progress_bar_empty_when_not_generating():
     result = ui.compose_frame(
         canvas_frame, mask_active, mask_present,
         show_mask=False, has_active_strokes=False,
-        generation_progress=0.5, is_generating=False,
+        generation_progress=0.0,
         button_states={},
     )
     margin = cfg.canvas_margin
@@ -158,6 +159,31 @@ def test_progress_bar_empty_when_not_generating():
     bar_region = result[bar_y:bar_y + 6, margin:margin + 512]
     # Should be uniform (all dark grey background)
     assert np.all(bar_region == bar_region[0, 0])
+
+
+def test_progress_bar_stays_full_between_cycles():
+    """After a cycle completes (progress=1.0), the bar must remain full until
+    the next cycle starts. This prevents the one-frame flicker that occurs
+    when gating fill on a transient ``is_generating`` flag."""
+    cfg = UIConfig(present_size=(512, 512), toolbar_height=28, progress_bar_height=6)
+    ui = make_ui(cfg)
+    canvas_frame = np.zeros((512, 512, 3), dtype=np.uint8)
+    mask_active = np.zeros((512, 512), dtype=np.uint8)
+    mask_present = np.zeros((512, 512, 3), dtype=np.uint8)
+
+    result = ui.compose_frame(
+        canvas_frame, mask_active, mask_present,
+        show_mask=False, has_active_strokes=False,
+        generation_progress=1.0,
+        button_states={},
+    )
+    margin = cfg.canvas_margin
+    bar_y = 40 + 512
+    # Both ends of the bar should be filled with the accent colour
+    left_pixel = result[bar_y + 2, margin + 5]
+    right_pixel = result[bar_y + 2, margin + 500]
+    assert int(left_pixel.sum()) > 100
+    assert int(right_pixel.sum()) > 100
 
 
 # -- mask overlay in compose --------------------------------------------------
@@ -173,7 +199,7 @@ def test_compose_overlays_mask_when_show_mask_true():
     result = ui.compose_frame(
         canvas_frame, mask_active, mask_present,
         show_mask=True, has_active_strokes=False,
-        generation_progress=0.0, is_generating=False,
+        generation_progress=0.0,
         button_states={},
     )
     # Canvas offset: (12, 40). Pixel at canvas (100,100) → window (112, 140)
@@ -259,7 +285,7 @@ def test_compose_frame_with_button_labels():
     result = ui.compose_frame(
         canvas_frame, mask_active, mask_present,
         show_mask=False, has_active_strokes=False,
-        generation_progress=0.0, is_generating=False,
+        generation_progress=0.0,
         button_states={},
         button_labels={"fps": "60"},
     )
@@ -277,7 +303,7 @@ def test_compose_frame_shape_with_toolbar_buttons():
     result = ui.compose_frame(
         canvas_frame, mask_active, mask_present,
         show_mask=False, has_active_strokes=False,
-        generation_progress=0.0, is_generating=False,
+        generation_progress=0.0,
         button_states={},
     )
     assert result.shape == (586, 536, 3)
@@ -309,7 +335,7 @@ def test_compose_frame_with_status_info():
     result = ui.compose_frame(
         canvas_frame, mask_active, mask_present,
         show_mask=False, has_active_strokes=False,
-        generation_progress=0.5, is_generating=True,
+        generation_progress=0.5,
         button_states={},
         status=status,
     )
@@ -369,7 +395,6 @@ def test_compose_frame_with_ui_notice():
         show_mask=False,
         has_active_strokes=False,
         generation_progress=0.0,
-        is_generating=False,
         button_states={},
         status=status,
     )
@@ -398,7 +423,7 @@ def test_compose_frame_with_thread_error_shows_red_badge():
     result = ui.compose_frame(
         canvas_frame, mask_active, mask_present,
         show_mask=False, has_active_strokes=False,
-        generation_progress=0.0, is_generating=False,
+        generation_progress=0.0,
         button_states={},
         status=status,
     )
@@ -430,13 +455,13 @@ def test_thread_error_takes_precedence_over_ui_notice():
     result_both = ui.compose_frame(
         canvas_frame, mask_active, mask_present,
         show_mask=False, has_active_strokes=False,
-        generation_progress=0.0, is_generating=False,
+        generation_progress=0.0,
         button_states={}, status=status_with_both,
     )
     result_notice = ui.compose_frame(
         canvas_frame, mask_active, mask_present,
         show_mask=False, has_active_strokes=False,
-        generation_progress=0.0, is_generating=False,
+        generation_progress=0.0,
         button_states={}, status=status_notice_only,
     )
     status_y = 40 + 512 + 6

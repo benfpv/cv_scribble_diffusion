@@ -133,10 +133,6 @@ def test_exit_requires_confirmation_click(app, monkeypatch):
     assert app._exit_confirm_until > 0
 
     app.mouse_callback(cv2.EVENT_LBUTTONDOWN, 5, 5, 0, None)
-    assert app.exit_triggered is False
-    assert app._exit_confirm_stage == 2
-
-    app.mouse_callback(cv2.EVENT_LBUTTONDOWN, 5, 5, 0, None)
     assert app.exit_triggered is True
 
 

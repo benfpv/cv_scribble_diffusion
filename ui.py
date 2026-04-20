@@ -141,7 +141,6 @@ class UIOverlay:
         show_mask: bool,
         has_active_strokes: bool,
         generation_progress: float,
-        is_generating: bool,
         button_states: Dict[str, bool],
         button_labels: Optional[Dict[str, str]] = None,
         status: Optional[StatusInfo] = None,
@@ -155,8 +154,10 @@ class UIOverlay:
         mask_present : uint8 BGR at present_size
         show_mask    : whether to overlay the stroke mask
         has_active_strokes : whether there are uncommitted strokes
-        generation_progress : 0.0-1.0 (used for progress bar fill)
-        is_generating : whether the pipeline is currently running
+        generation_progress : 0.0-1.0 progress bar fill ratio. Reset to 0.0
+            by ``Animator.prepare_generation`` at the start of each cycle and
+            held at 1.0 by the outro until the next cycle begins, so the bar
+            does not flicker between back-to-back generations.
         button_states : mapping action→triggered (colour swap)
         button_labels : optional mapping action→dynamic label override
         status        : optional generation metadata for the status bar
@@ -190,10 +191,14 @@ class UIOverlay:
             self._draw_toolbar(frame, button_states, button_labels)
 
         # -- progress bar (canvas-aligned) --
+        # Fill is driven by ``generation_progress`` alone. The animator resets
+        # this to 0.0 at the start of each cycle and snaps to 1.0 on outro
+        # completion, so chained cycles transition full → 0 → full without a
+        # blank frame in between.
         bar_y = cy + ph
         frame[bar_y:bar_y + cfg.progress_bar_height, cx:cx + pw] = _PROGRESS_BG
-        if is_generating and generation_progress > 0:
-            fill_w = max(1, int(pw * generation_progress))
+        if generation_progress > 0:
+            fill_w = max(1, int(pw * min(generation_progress, 1.0)))
             frame[bar_y:bar_y + cfg.progress_bar_height, cx:cx + fill_w] = _PROGRESS_FG
 
         # -- status bar --

@@ -202,19 +202,16 @@ class App:
                 if now > self._exit_confirm_until:
                     self._exit_confirm_stage = 0
 
-                if self._exit_confirm_stage >= 2:
+                # Two-click exit: first click arms, second click confirms.
+                if self._exit_confirm_stage >= 1:
                     self._announce("Exiting", source="Toolbar")
                     self._exit_confirm_stage = 0
                     self._exit_confirm_until = 0.0
                     self.trigger_exit()
                 else:
-                    self._exit_confirm_stage += 1
+                    self._exit_confirm_stage = 1
                     self._exit_confirm_until = now + 2.5
-                    remaining = 3 - self._exit_confirm_stage
-                    if remaining == 1:
-                        notice = "Click EXIT once more to confirm"
-                    else:
-                        notice = f"Click EXIT {remaining} more times to confirm"
+                    notice = "Click EXIT once more to confirm"
                     self._announce(notice, source="Toolbar")
                     self._set_ui_notice(notice, duration_s=2.5)
                 return
@@ -645,7 +642,7 @@ class App:
                 "fps": False,
             }
             button_labels = {
-                "exit": f"EXIT {self._exit_confirm_stage}/3" if exit_armed else "EXIT",
+                "exit": f"EXIT {self._exit_confirm_stage}/2" if exit_armed else "EXIT",
                 "undo": "UNDO",
                 "steps_dec": "MAX-",
                 "steps_inc": "MAX+",
@@ -670,7 +667,6 @@ class App:
                 self.mask_visibility_toggle,
                 self.canvas.has_active_strokes,
                 self.animator.generation_progress,
-                is_generating,
                 button_states,
                 button_labels,
                 status=status,
