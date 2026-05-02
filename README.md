@@ -6,7 +6,7 @@ Draw on the canvas and the app continuously generates imagery around your stroke
 
 The app window includes a compact **SCR** identity rail on the left; the full window title and rail mark can be configured in `UIConfig` inside `config.py`.
 
-![ezgif-6ada7aacde7deecd](https://github.com/user-attachments/assets/701740fa-ab1a-492e-b688-8f53b629e586)
+https://github.com/user-attachments/assets/0743eba9-6edc-4657-a160-ae95a96438b4
 
 Inspired in part by projects such as [krita-ai-diffusion](https://github.com/Acly/krita-ai-diffusion/releases/tag/v1.9.0).
 
