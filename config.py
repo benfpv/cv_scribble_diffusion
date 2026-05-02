@@ -66,6 +66,10 @@ class UIConfig:
     """Brush, window, and layout settings."""
     image_size: Tuple[int, int] = (512, 512)
     present_size: Tuple[int, int] = (512, 512)
+    app_title: str = "Scribble Diffusion"
+    title_mark: str = "SCR"
+    show_title_rail: bool = True
+    title_rail_width: int = 32
     brush_thickness: int = 2
     brush_stroke_multiplier: float = 1.4
     max_brush_thickness: int = 20
@@ -80,7 +84,11 @@ class UIConfig:
     display_fps_default: int = 60
     interp_fps: int = 30
     image_store_limit_count: int = 9
-    window_name: str = "ai_paint_diffusion"
+    window_name: str = ""
+
+    def __post_init__(self):
+        if not self.window_name:
+            self.window_name = self.app_title
 
     @property
     def display_scale(self) -> Tuple[float, float]:
@@ -92,10 +100,11 @@ class UIConfig:
 
     @property
     def window_size(self) -> Tuple[int, int]:
-        """(w, h) of the full OpenCV window: toolbar + margins + canvas + footer."""
+        """(w, h) of the full OpenCV window: rail + toolbar + canvas + footer."""
+        rail = max(0, self.title_rail_width) if self.show_title_rail else 0
         tb = self.toolbar_height if self.show_toolbar else 0
         footer = self.progress_bar_height + self.status_bar_height
-        w = self.canvas_margin * 2 + self.present_size[0]
+        w = rail + self.canvas_margin * 2 + self.present_size[0]
         h = tb + self.canvas_margin + self.present_size[1] + self.canvas_margin + footer
         return (w, h)
 

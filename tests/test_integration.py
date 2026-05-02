@@ -75,6 +75,10 @@ def _run_one_generation(app, timeout=10):
     t.join(timeout=2)
 
 
+def _canvas_point(app, x=8, y=10):
+    return app.ui.canvas_x_offset + x, app.ui.canvas_y_offset + y
+
+
 # -- GenState transitions ----------------------------------------------------
 
 def test_initial_state_is_idle(app):
@@ -82,19 +86,22 @@ def test_initial_state_is_idle(app):
 
 
 def test_drawing_transitions_idle_to_ready(app):
-    app.mouse_callback(cv2.EVENT_LBUTTONDOWN, 20, 50, 0, None)
+    x, y = _canvas_point(app)
+    app.mouse_callback(cv2.EVENT_LBUTTONDOWN, x, y, 0, None)
     assert app._gen_state == GenState.READY
 
 
 def test_drawing_resets_inference_steps_to_min(app):
     app._inference_steps = 10
-    app.mouse_callback(cv2.EVENT_LBUTTONDOWN, 20, 50, 0, None)
+    x, y = _canvas_point(app)
+    app.mouse_callback(cv2.EVENT_LBUTTONDOWN, x, y, 0, None)
     assert app._inference_steps == app.cfg.inference.min_inference_steps
 
 
 def test_stroke_stops_when_cursor_leaves_canvas(app):
     # Start inside the canvas.
-    app.mouse_callback(cv2.EVENT_LBUTTONDOWN, 20, 50, 0, None)
+    x, y = _canvas_point(app)
+    app.mouse_callback(cv2.EVENT_LBUTTONDOWN, x, y, 0, None)
     assert app.canvas.drawing is True
 
     # Move outside canvas bounds (left margin) while still pressed.
@@ -102,15 +109,18 @@ def test_stroke_stops_when_cursor_leaves_canvas(app):
     assert app.canvas.drawing is False
 
     # Re-entering without a new press should not resume drawing.
-    app.mouse_callback(cv2.EVENT_MOUSEMOVE, 25, 55, 0, None)
+    reenter_x, reenter_y = _canvas_point(app, 13, 15)
+    app.mouse_callback(cv2.EVENT_MOUSEMOVE, reenter_x, reenter_y, 0, None)
     assert app.canvas.drawing is False
 
 
 def test_stroke_preserved_when_cursor_leaves_canvas(app):
     import numpy as np
     # Start drawing inside the canvas.
-    app.mouse_callback(cv2.EVENT_LBUTTONDOWN, 20, 50, 0, None)
-    app.mouse_callback(cv2.EVENT_MOUSEMOVE, 30, 60, 0, None)
+    x, y = _canvas_point(app)
+    move_x, move_y = _canvas_point(app, 18, 20)
+    app.mouse_callback(cv2.EVENT_LBUTTONDOWN, x, y, 0, None)
+    app.mouse_callback(cv2.EVENT_MOUSEMOVE, move_x, move_y, 0, None)
     
     # Commit active strokes so they land in the persistent mask.
     app.canvas.commit_active_to_mask()
@@ -522,9 +532,10 @@ def test_trigger_exit_unblocks_gen_done(app):
 
 def test_undo_clears_thread_error(app):
     """Undo (via _restore_snapshot) should clear sticky thread errors."""
-    app.mouse_callback(cv2.EVENT_LBUTTONDOWN, 20, 50, 0, None)
+    x, y = _canvas_point(app)
+    app.mouse_callback(cv2.EVENT_LBUTTONDOWN, x, y, 0, None)
     app.canvas.commit_active_to_mask()
-    app.mouse_callback(cv2.EVENT_LBUTTONUP, 20, 50, 0, None)
+    app.mouse_callback(cv2.EVENT_LBUTTONUP, x, y, 0, None)
     app._thread_error = "some error"
     app._undo_last_stroke()
     assert app._thread_error is None

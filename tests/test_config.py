@@ -68,7 +68,7 @@ def test_window_size_with_toolbar():
         progress_bar_height=6, status_bar_height=16,
     )
     w, h = cfg.window_size
-    assert w == 12 + 512 + 12  # 536
+    assert w == 32 + 12 + 512 + 12  # 568
     assert h == 28 + 12 + 512 + 12 + 6 + 16  # 586
 
 
@@ -79,8 +79,38 @@ def test_window_size_without_toolbar():
         progress_bar_height=6, status_bar_height=16,
     )
     w, h = cfg.window_size
-    assert w == 536
+    assert w == 568
     assert h == 0 + 12 + 512 + 12 + 6 + 16  # 558
+
+
+def test_window_size_with_title_rail_disabled():
+    cfg = UIConfig(
+        present_size=(512, 512), show_toolbar=True, show_title_rail=False,
+        toolbar_height=28, canvas_margin=12,
+        progress_bar_height=6, status_bar_height=16,
+    )
+    w, h = cfg.window_size
+    assert w == 12 + 512 + 12  # 536
+    assert h == 28 + 12 + 512 + 12 + 6 + 16  # 586
+
+
+def test_ui_config_title_defaults():
+    cfg = UIConfig()
+    assert cfg.app_title == "Scribble Diffusion"
+    assert cfg.title_mark == "SCR"
+    assert cfg.show_title_rail is True
+    assert cfg.title_rail_width == 32
+    assert cfg.window_name == "Scribble Diffusion"
+
+
+def test_ui_config_app_title_sets_default_window_name():
+    cfg = UIConfig(app_title="Sketch Lab")
+    assert cfg.window_name == "Sketch Lab"
+
+
+def test_ui_config_window_name_can_override_app_title():
+    cfg = UIConfig(app_title="Sketch Lab", window_name="Custom Window")
+    assert cfg.window_name == "Custom Window"
 
 
 # -- InferenceConfig defaults sanity ----------------------------------------

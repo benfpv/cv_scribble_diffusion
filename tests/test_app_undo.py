@@ -22,10 +22,15 @@ def app(monkeypatch, patch_cv_window, mock_pipeline_cls):
     return App(_make_cfg())
 
 
+def _canvas_point(app, x=8, y=10):
+    return app.ui.canvas_x_offset + x, app.ui.canvas_y_offset + y
+
+
 def test_undo_restores_previous_mask_state(app):
-    app.mouse_callback(cv2.EVENT_LBUTTONDOWN, 20, 50, 0, None)
+    x, y = _canvas_point(app)
+    app.mouse_callback(cv2.EVENT_LBUTTONDOWN, x, y, 0, None)
     app.canvas.commit_active_to_mask()
-    app.mouse_callback(cv2.EVENT_LBUTTONUP, 20, 50, 0, None)
+    app.mouse_callback(cv2.EVENT_LBUTTONUP, x, y, 0, None)
     assert np.any(app.canvas.mask)
 
     app._undo_last_stroke()
@@ -44,9 +49,10 @@ def test_undo_during_generation_restores_after_reset(monkeypatch, patch_cv_windo
     monkeypatch.setattr("main.DiffusionPipeline", slow_pipeline_cls)
     app = App(_make_cfg())
 
-    app.mouse_callback(cv2.EVENT_LBUTTONDOWN, 20, 50, 0, None)
+    x, y = _canvas_point(app)
+    app.mouse_callback(cv2.EVENT_LBUTTONDOWN, x, y, 0, None)
     app.canvas.commit_active_to_mask()
-    app.mouse_callback(cv2.EVENT_LBUTTONUP, 20, 50, 0, None)
+    app.mouse_callback(cv2.EVENT_LBUTTONUP, x, y, 0, None)
     assert np.any(app.canvas.mask)
     assert len(app._undo_stack) == 1
 
@@ -85,9 +91,10 @@ def test_undo_during_generation_restores_after_reset(monkeypatch, patch_cv_windo
 
 @pytest.mark.parametrize("key_code", [26, ord("z"), ord("Z"), ord("u"), ord("U")])
 def test_keyboard_undo_shortcuts_restore_previous_state(app, key_code):
-    app.mouse_callback(cv2.EVENT_LBUTTONDOWN, 20, 50, 0, None)
+    x, y = _canvas_point(app)
+    app.mouse_callback(cv2.EVENT_LBUTTONDOWN, x, y, 0, None)
     app.canvas.commit_active_to_mask()
-    app.mouse_callback(cv2.EVENT_LBUTTONUP, 20, 50, 0, None)
+    app.mouse_callback(cv2.EVENT_LBUTTONUP, x, y, 0, None)
     assert np.any(app.canvas.mask)
 
     app._handle_keypress(key_code)

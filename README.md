@@ -1,5 +1,7 @@
-# cv_scribble_diffusion
-cv_scribble_diffusion opens a drawing window using OpenCV, allowing you to sketch with your mouse. Your scribble guides a ControlNet-driven Stable Diffusion inpainting pipeline that runs asynchronously and reveals generated imagery with a smooth animated wavefront expanding outward from your drawn strokes — creating a continuous loop of visual inspiration.
+# Scribble Diffusion (`cv_scribble_diffusion`)
+Scribble Diffusion opens a drawing window using OpenCV, allowing you to sketch with your mouse. Your scribble guides a ControlNet-driven Stable Diffusion inpainting pipeline that runs asynchronously and reveals generated imagery with a smooth animated wavefront expanding outward from your drawn strokes — creating a continuous loop of visual inspiration.
+
+The app window includes a compact **SCR** identity rail on the left; the full window title and rail mark can be configured in `UIConfig` inside `config.py`.
 
 ![cv_scribble_diffusion_demo](https://github.com/user-attachments/assets/4e8307c4-4dd4-437d-9142-435f09a02ce7)
 
@@ -7,10 +9,11 @@ This is partly inspired by already existing similar projects, for example (not n
 - krita-ai-diffusion (https://github.com/Acly/krita-ai-diffusion/releases/tag/v1.9.0)
 
 # Repository Contents
-1. `main.py` — application entry point; all drawing, diffusion, and animation logic
-2. `functions_diffusion_image_s.py` — thin wrappers around the diffusers pipeline calls
-3. `LICENSE`
-4. `README.md`
+1. `main.py` — application entry point and OpenCV event loop
+2. `config.py` — centralised model, inference, reveal, UI, debug, and logging settings
+3. `pipeline.py` — model loading and ControlNet inpainting wrapper
+4. `animator.py`, `canvas.py`, `ui.py` — animation, drawing state, and window composition
+5. `tests/` — unit and integration coverage for layout, generation helpers, undo, logging, and pipeline wiring
 
 # Models
 **The model weights are NOT included in this repository** (files are too large).
@@ -27,7 +30,8 @@ The expected project layout after placing the models:
 ```
 cv_scribble_diffusion/
     main.py
-    functions_diffusion_image_s.py
+    config.py
+    pipeline.py
     stable-diffusion-v1-5/      ← download separately
     sd-controlnet-scribble/     ← download separately
 ```
@@ -35,7 +39,7 @@ cv_scribble_diffusion/
 ### Auto-downloaded model
 `madebyollin/taesd` (AutoencoderTiny) is downloaded automatically on the first run via HuggingFace and cached locally. No manual step needed.
 
-> **Note:** If you want to use a different base model or ControlNet, update `local_pipe_path` / `local_scribble_path` in `main.py` and adjust the pipeline class in `functions_diffusion_image_s.py` as needed.
+> **Note:** If you want to use a different base model or ControlNet, update `ModelConfig.pipe_path` / `ModelConfig.scribble_path` in `config.py` and adjust `pipeline.py` as needed.
 
 # Requirements
 1. Python 3.12+ (may also work on other 3.x versions)
@@ -43,8 +47,8 @@ cv_scribble_diffusion/
 3. A CUDA-capable GPU is strongly recommended; CPU inference is supported but very slow
 
 # Instructions to Run
-1. Download the required models listed above and place them in the project root (paths must match `local_pipe_path` and `local_scribble_path` at the top of `main.py`).
-2. *(Optional)* Edit parameters such as `prompt`, `reveal_mode`, or `brush_thickness` in `Main.__init__` inside `main.py`.
+1. Download the required models listed above and place them in the project root (paths must match `ModelConfig.pipe_path` and `ModelConfig.scribble_path` in `config.py`).
+2. *(Optional)* Edit parameters such as `prompt`, `reveal_mode`, `brush_thickness`, or the `SCR` identity rail in `config.py`.
 3. Run `main.py`:
    ```
    py main.py

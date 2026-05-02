@@ -11,6 +11,18 @@ def make_ui(cfg: UIConfig = None) -> UIOverlay:
     return UIOverlay(cfg or UIConfig())
 
 
+# -- canvas_x_offset ----------------------------------------------------------
+
+def test_canvas_x_offset_with_title_rail():
+    ui = make_ui(UIConfig(canvas_margin=12, title_rail_width=32))
+    assert ui.canvas_x_offset == 44  # rail(32) + margin(12)
+
+
+def test_canvas_x_offset_without_title_rail():
+    ui = make_ui(UIConfig(canvas_margin=12, show_title_rail=False))
+    assert ui.canvas_x_offset == 12
+
+
 # -- canvas_y_offset ----------------------------------------------------------
 
 def test_canvas_y_offset_with_toolbar():
@@ -28,7 +40,7 @@ def test_canvas_y_offset_without_toolbar():
 def test_canvas_coords_in_canvas():
     ui = make_ui(UIConfig(toolbar_height=28, present_size=(512, 512)))
     result = ui.canvas_coords(100, 50)
-    assert result == (88, 10)  # x: 100-12, y: 50-40
+    assert result == (56, 10)  # x: 100-(rail 32 + margin 12), y: 50-40
 
 
 def test_canvas_coords_in_toolbar():
@@ -39,14 +51,14 @@ def test_canvas_coords_in_toolbar():
 
 def test_canvas_coords_below_canvas():
     ui = make_ui(UIConfig(toolbar_height=28, present_size=(512, 512)))
-    result = ui.canvas_coords(100, 40 + 512 + 5)  # below canvas
+    result = ui.canvas_coords(100, ui.canvas_y_offset + 512 + 5)  # below canvas
     assert result is None
 
 
 def test_canvas_coords_in_margin():
     ui = make_ui(UIConfig(toolbar_height=28, present_size=(512, 512)))
-    # x=5 is in the left margin (canvas starts at x=12)
-    assert ui.canvas_coords(5, 50) is None
+    # x=36 is in the left margin after the rail (canvas starts at x=44)
+    assert ui.canvas_coords(36, 50) is None
 
 
 # -- hit_test -----------------------------------------------------------------
@@ -95,8 +107,8 @@ def test_compose_frame_shape():
         generation_progress=0.0,
         button_states={},
     )
-    # h = 28 + 12 + 512 + 12 + 6 + 16 = 586, w = 12 + 512 + 12 = 536
-    assert result.shape == (586, 536, 3)
+    # h = 28 + 12 + 512 + 12 + 6 + 16 = 586, w = rail(32) + 12 + 512 + 12 = 568
+    assert result.shape == (586, 568, 3)
 
 
 def test_compose_frame_no_toolbar():
@@ -112,8 +124,47 @@ def test_compose_frame_no_toolbar():
         generation_progress=0.0,
         button_states={},
     )
-    # h = 0 + 12 + 512 + 12 + 6 + 16 = 558, w = 536
-    assert result.shape == (558, 536, 3)
+    # h = 0 + 12 + 512 + 12 + 6 + 16 = 558, w = rail(32) + 12 + 512 + 12 = 568
+    assert result.shape == (558, 568, 3)
+
+
+def test_compose_frame_title_rail_disabled_uses_old_width():
+    cfg = UIConfig(
+        present_size=(512, 512), toolbar_height=28,
+        progress_bar_height=6, show_title_rail=False,
+    )
+    ui = make_ui(cfg)
+    canvas_frame = np.zeros((512, 512, 3), dtype=np.uint8)
+    mask_active = np.zeros((512, 512), dtype=np.uint8)
+    mask_present = np.zeros((512, 512, 3), dtype=np.uint8)
+
+    result = ui.compose_frame(
+        canvas_frame, mask_active, mask_present,
+        show_mask=False, has_active_strokes=False,
+        generation_progress=0.0,
+        button_states={},
+    )
+    assert result.shape == (586, 536, 3)
+
+
+def test_title_rail_renders_identity_mark():
+    cfg = UIConfig(present_size=(512, 512), toolbar_height=28, title_rail_width=32)
+    ui = make_ui(cfg)
+    canvas_frame = np.zeros((512, 512, 3), dtype=np.uint8)
+    mask_active = np.zeros((512, 512), dtype=np.uint8)
+    mask_present = np.zeros((512, 512, 3), dtype=np.uint8)
+
+    result = ui.compose_frame(
+        canvas_frame, mask_active, mask_present,
+        show_mask=False, has_active_strokes=False,
+        generation_progress=0.0,
+        button_states={},
+    )
+    rail_region = result[ui.canvas_y_offset:ui.canvas_y_offset + 90, :ui.title_rail_width - 1]
+    assert len(np.unique(rail_region.reshape(-1, 3), axis=0)) > 1
+    divider_pixel = result[ui.canvas_y_offset + 5, ui.title_rail_width - 1]
+    rail_pixel = result[ui.canvas_y_offset + 5, 1]
+    assert not np.array_equal(divider_pixel, rail_pixel)
 
 
 # -- progress bar fill -------------------------------------------------------
@@ -131,12 +182,11 @@ def test_progress_bar_fills_with_progress_value():
         generation_progress=0.5,
         button_states={},
     )
-    margin = cfg.canvas_margin  # 12
-    bar_row = 40 + 512  # toolbar(28) + margin(12) + canvas(512)
+    bar_row = ui.canvas_y_offset + cfg.present_size[1]
     # Left side (inside bar) should have accent colour
-    left_pixel = result[bar_row, margin + 10]
+    left_pixel = result[bar_row, ui.canvas_x_offset + 10]
     # Right side (inside bar, past 50%) should be dark background
-    right_pixel = result[bar_row, margin + 400]
+    right_pixel = result[bar_row, ui.canvas_x_offset + 400]
     assert int(left_pixel.sum()) > int(right_pixel.sum())
 
 
@@ -154,9 +204,9 @@ def test_progress_bar_empty_when_progress_zero():
         generation_progress=0.0,
         button_states={},
     )
-    margin = cfg.canvas_margin
-    bar_y = 40 + 512
-    bar_region = result[bar_y:bar_y + 6, margin:margin + 512]
+    bar_y = ui.canvas_y_offset + cfg.present_size[1]
+    bar_region = result[bar_y:bar_y + cfg.progress_bar_height,
+                        ui.canvas_x_offset:ui.canvas_x_offset + cfg.present_size[0]]
     # Should be uniform (all dark grey background)
     assert np.all(bar_region == bar_region[0, 0])
 
@@ -177,11 +227,10 @@ def test_progress_bar_stays_full_between_cycles():
         generation_progress=1.0,
         button_states={},
     )
-    margin = cfg.canvas_margin
-    bar_y = 40 + 512
+    bar_y = ui.canvas_y_offset + cfg.present_size[1]
     # Both ends of the bar should be filled with the accent colour
-    left_pixel = result[bar_y + 2, margin + 5]
-    right_pixel = result[bar_y + 2, margin + 500]
+    left_pixel = result[bar_y + 2, ui.canvas_x_offset + 5]
+    right_pixel = result[bar_y + 2, ui.canvas_x_offset + 500]
     assert int(left_pixel.sum()) > 100
     assert int(right_pixel.sum()) > 100
 
@@ -202,8 +251,7 @@ def test_compose_overlays_mask_when_show_mask_true():
         generation_progress=0.0,
         button_states={},
     )
-    # Canvas offset: (12, 40). Pixel at canvas (100,100) → window (112, 140)
-    assert result[40 + 100, 12 + 100, 1] == 150
+    assert result[ui.canvas_y_offset + 100, ui.canvas_x_offset + 100, 1] == 150
 
 
 # -- fps button ---------------------------------------------------------------
@@ -289,7 +337,7 @@ def test_compose_frame_with_button_labels():
         button_states={},
         button_labels={"fps": "60"},
     )
-    assert result.shape == (586, 536, 3)
+    assert result.shape == (586, 568, 3)
 
 
 def test_compose_frame_shape_with_toolbar_buttons():
@@ -306,7 +354,7 @@ def test_compose_frame_shape_with_toolbar_buttons():
         generation_progress=0.0,
         button_states={},
     )
-    assert result.shape == (586, 536, 3)
+    assert result.shape == (586, 568, 3)
 
 
 def test_toolbar_group_spacing_is_larger_between_clusters():
@@ -339,16 +387,12 @@ def test_compose_frame_with_status_info():
         button_states={},
         status=status,
     )
-    assert result.shape == (586, 536, 3)
+    assert result.shape == (586, 568, 3)
     # Status bar region should have non-zero pixels (rendered text)
-    status_y = 40 + 512 + 6  # canvas_y_offset + canvas + progress_bar
-    status_region = result[status_y:status_y + 16, 12:524]
+    status_y = ui.canvas_y_offset + cfg.present_size[1] + cfg.progress_bar_height
+    status_region = result[status_y:status_y + cfg.status_bar_height,
+                           ui.canvas_x_offset:ui.canvas_x_offset + cfg.present_size[0]]
     assert status_region.sum() > 0
-
-
-def test_canvas_x_offset():
-    ui = make_ui(UIConfig(canvas_margin=12))
-    assert ui.canvas_x_offset == 12
 
 
 def test_quality_text_is_clear_for_active_generation():
@@ -398,8 +442,9 @@ def test_compose_frame_with_ui_notice():
         button_states={},
         status=status,
     )
-    status_y = 40 + 512 + 6
-    status_region = result[status_y:status_y + 16, 12:524]
+    status_y = ui.canvas_y_offset + cfg.present_size[1] + cfg.progress_bar_height
+    status_region = result[status_y:status_y + cfg.status_bar_height,
+                           ui.canvas_x_offset:ui.canvas_x_offset + cfg.present_size[0]]
     assert status_region.sum() > 0
 
 
@@ -427,9 +472,9 @@ def test_compose_frame_with_thread_error_shows_red_badge():
         button_states={},
         status=status,
     )
-    status_y = 40 + 512 + 6
+    status_y = ui.canvas_y_offset + cfg.present_size[1] + cfg.progress_bar_height
     # The ERR badge area (left side of status bar) should contain red pixels (BGR: 50,50,220)
-    badge_region = result[status_y:status_y + 14, 14:44]
+    badge_region = result[status_y:status_y + 14, ui.canvas_x_offset + 2:ui.canvas_x_offset + 32]
     # Red channel (BGR index 2) should dominate in the badge region
     assert badge_region[:, :, 2].max() >= 200, "ERR badge should contain red fill"
 
@@ -464,9 +509,9 @@ def test_thread_error_takes_precedence_over_ui_notice():
         generation_progress=0.0,
         button_states={}, status=status_notice_only,
     )
-    status_y = 40 + 512 + 6
-    badge_area_both = result_both[status_y:status_y + 14, 14:44]
-    badge_area_notice = result_notice[status_y:status_y + 14, 14:44]
+    status_y = ui.canvas_y_offset + cfg.present_size[1] + cfg.progress_bar_height
+    badge_area_both = result_both[status_y:status_y + 14, ui.canvas_x_offset + 2:ui.canvas_x_offset + 32]
+    badge_area_notice = result_notice[status_y:status_y + 14, ui.canvas_x_offset + 2:ui.canvas_x_offset + 32]
     # With both set, error badge should have more red than notice-only
     red_both = int(badge_area_both[:, :, 2].sum())
     red_notice = int(badge_area_notice[:, :, 2].sum())
