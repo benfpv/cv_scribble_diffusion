@@ -4,6 +4,8 @@ Real-time scribble-to-image generation with OpenCV, ControlNet scribble guidance
 
 Draw on the canvas and the app continuously generates imagery around your strokes. New results are blended in with a reveal animation so the output feels live and iterative.
 
+The app window includes a compact **SCR** identity rail on the left; the full window title and rail mark can be configured in `UIConfig` inside `config.py`.
+
 ![ezgif-6ada7aacde7deecd](https://github.com/user-attachments/assets/701740fa-ab1a-492e-b688-8f53b629e586)
 
 Inspired in part by projects such as [krita-ai-diffusion](https://github.com/Acly/krita-ai-diffusion/releases/tag/v1.9.0).
@@ -15,7 +17,10 @@ Inspired in part by projects such as [krita-ai-diffusion](https://github.com/Acl
 - `canvas.py`: stroke masks, brush behavior, image compositing helpers
 - `animator.py`: reveal/interpolation animation pipeline
 - `reveal.py`: reveal map and blend math
-- `config.py`: centralized app settings
+- `config.py`: centralized app settings (`ModelConfig`, `InferenceConfig`, `RevealConfig`, `UIConfig`)
+- `generation.py`: crop planning, mask dilation, and inpaint assembly helpers
+- `ui.py`: window composition and toolbar rendering
+- `tests/`: unit and integration coverage for layout, generation helpers, undo, logging, and pipeline wiring
 - `requirements.txt`: Python dependencies
 
 ## Models
@@ -30,6 +35,8 @@ Download and place these folders in the project root:
 | `sd-controlnet-scribble/` | [lllyasviel/sd-controlnet-scribble](https://huggingface.co/lllyasviel/sd-controlnet-scribble) |
 
 `madebyollin/taesd` is downloaded automatically on first run.
+
+> **Note:** To use a different base model or ControlNet, update `ModelConfig.pipe_path` / `ModelConfig.scribble_path` in `config.py` and adjust `pipeline.py` as needed.
 
 ## Requirements
 
@@ -87,7 +94,7 @@ First launch may take a while due to model initialization.
 | `Ctrl+Z`, `Z`, `U` | Undo last stroke |
 | `Left Arrow` | Decrease brush thickness |
 | `Right Arrow` | Increase brush thickness |
-| `Esc` | Exit app |
+| `Esc` | Arm/confirm exit (press twice to exit) |
 
 ## Configuration
 
@@ -96,7 +103,7 @@ Edit values in `config.py`:
 - `ModelConfig`: local model paths and GPU usage
 - `InferenceConfig`: prompt, guidance, crop behavior, step schedule
 - `RevealConfig`: reveal mode, interpolation, noise/outro tuning
-- `UIConfig`: image/present size, brush defaults, window settings
+- `UIConfig`: image/present size, brush defaults, window settings (including SCR identity rail)
 
 ## Troubleshooting
 

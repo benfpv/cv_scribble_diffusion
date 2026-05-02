@@ -59,6 +59,10 @@ _PANEL_BORDER = (54, 54, 54)
 _PROGRESS_BG = (46, 46, 46)
 _PROGRESS_FG = (86, 164, 236)
 _CANVAS_BORDER = (82, 82, 82)
+_RAIL_BG = (18, 18, 19)
+_RAIL_DIVIDER = (48, 48, 52)
+_RAIL_TEXT = (178, 186, 194)
+_RAIL_ACCENT = _PROGRESS_FG
 _GROUP_BREAK_AFTER = {"undo", "mask", "brush_inc"}
 
 
@@ -78,7 +82,7 @@ class UIOverlay:
     def _layout_buttons(self):
         """Compute centred button positions in the toolbar strip."""
         cfg = self._cfg
-        ww = cfg.present_size[0] + 2 * cfg.canvas_margin
+        ww = cfg.window_size[0]
         total_w = sum(b.width for b in self._buttons)
         total_w += sum(self._gap_after(btn.action) for btn in self._buttons[:-1])
         x = (ww - total_w) // 2
@@ -101,9 +105,16 @@ class UIOverlay:
     # -- public properties ----------------------------------------------------
 
     @property
+    def title_rail_width(self) -> int:
+        """Width of the left identity rail, or 0 when disabled."""
+        if not self._cfg.show_title_rail:
+            return 0
+        return max(0, self._cfg.title_rail_width)
+
+    @property
     def canvas_x_offset(self) -> int:
         """Horizontal pixel offset from left of window to left of canvas."""
-        return self._cfg.canvas_margin
+        return self.title_rail_width + self._cfg.canvas_margin
 
     @property
     def canvas_y_offset(self) -> int:
@@ -141,7 +152,6 @@ class UIOverlay:
         show_mask: bool,
         has_active_strokes: bool,
         generation_progress: float,
-        is_generating: bool,
         button_states: Dict[str, bool],
         button_labels: Optional[Dict[str, str]] = None,
         status: Optional[StatusInfo] = None,
@@ -155,8 +165,10 @@ class UIOverlay:
         mask_present : uint8 BGR at present_size
         show_mask    : whether to overlay the stroke mask
         has_active_strokes : whether there are uncommitted strokes
-        generation_progress : 0.0-1.0 (used for progress bar fill)
-        is_generating : whether the pipeline is currently running
+        generation_progress : 0.0-1.0 progress bar fill ratio. Reset to 0.0
+            by ``Animator.prepare_generation`` at the start of each cycle and
+            held at 1.0 by the outro until the next cycle begins, so the bar
+            does not flicker between back-to-back generations.
         button_states : mapping action→triggered (colour swap)
         button_labels : optional mapping action→dynamic label override
         status        : optional generation metadata for the status bar
@@ -175,6 +187,10 @@ class UIOverlay:
             frame[:cfg.toolbar_height, :] = _TOOLBAR_BG
             cv2.line(frame, (0, cfg.toolbar_height - 1), (ww - 1, cfg.toolbar_height - 1), _PANEL_BORDER, 1)
 
+        # -- left identity rail --
+        if self.title_rail_width > 0:
+            self._draw_identity_rail(frame)
+
         # -- canvas region --
         display = canvas_frame.copy()
         if has_active_strokes and not show_mask:
@@ -190,10 +206,14 @@ class UIOverlay:
             self._draw_toolbar(frame, button_states, button_labels)
 
         # -- progress bar (canvas-aligned) --
+        # Fill is driven by ``generation_progress`` alone. The animator resets
+        # this to 0.0 at the start of each cycle and snaps to 1.0 on outro
+        # completion, so chained cycles transition full → 0 → full without a
+        # blank frame in between.
         bar_y = cy + ph
         frame[bar_y:bar_y + cfg.progress_bar_height, cx:cx + pw] = _PROGRESS_BG
-        if is_generating and generation_progress > 0:
-            fill_w = max(1, int(pw * generation_progress))
+        if generation_progress > 0:
+            fill_w = max(1, int(pw * min(generation_progress, 1.0)))
             frame[bar_y:bar_y + cfg.progress_bar_height, cx:cx + fill_w] = _PROGRESS_FG
 
         # -- status bar --
@@ -205,6 +225,36 @@ class UIOverlay:
         return frame
 
     # -- internal drawing helpers ---------------------------------------------
+
+    def _draw_identity_rail(self, frame: np.ndarray):
+        """Render the left SCR identity rail."""
+        rail_w = self.title_rail_width
+        if rail_w <= 0:
+            return
+
+        frame[:, :rail_w] = _RAIL_BG
+        cv2.line(frame, (rail_w - 1, 0), (rail_w - 1, frame.shape[0] - 1), _RAIL_DIVIDER, 1)
+
+        mark = "".join(ch for ch in self._cfg.title_mark.upper() if ch.isalnum())[:3]
+        if not mark:
+            return
+
+        font = cv2.FONT_HERSHEY_SIMPLEX
+        scale = 0.46
+        thickness = 1
+        y = self.canvas_y_offset + 10
+        for ch in mark:
+            (tw, th), _ = cv2.getTextSize(ch, font, scale, thickness)
+            x = max(1, (rail_w - tw) // 2)
+            baseline = y + th
+            cv2.putText(frame, ch, (x, baseline), font, scale, _RAIL_TEXT, thickness, cv2.LINE_AA)
+            y = baseline + 9
+
+        accent_x = rail_w // 2
+        accent_y1 = y + 2
+        accent_y2 = min(accent_y1 + 18, frame.shape[0] - 8)
+        if accent_y2 > accent_y1:
+            cv2.line(frame, (accent_x, accent_y1), (accent_x, accent_y2), _RAIL_ACCENT, 1)
 
     def _draw_toolbar(self, frame: np.ndarray, button_states: Dict[str, bool],
                        button_labels: Optional[Dict[str, str]] = None):
@@ -237,11 +287,23 @@ class UIOverlay:
         color = (152, 152, 152)
         text_y = y_top + 12
 
-        # Thread error takes precedence over normal status
+        # Thread error takes precedence over normal status. A small filled
+        # "ERR" badge is rendered on the left so the error stands out from
+        # the regular metric strip even at small font sizes.
         if status.thread_error:
             error_color = (50, 50, 220)  # red in BGR
-            error_text = f"Error: {status.thread_error[:60]}"
-            cv2.putText(frame, error_text, (x_off + 2, text_y),
+            badge_w = 30
+            badge_h = 12
+            badge_x1 = x_off + 2
+            badge_y1 = text_y - badge_h + 2
+            badge_x2 = badge_x1 + badge_w
+            badge_y2 = badge_y1 + badge_h
+            cv2.rectangle(frame, (badge_x1, badge_y1), (badge_x2, badge_y2),
+                          error_color, -1)
+            cv2.putText(frame, "ERR", (badge_x1 + 3, badge_y2 - 3),
+                        font, scale, (255, 255, 255), thickness, cv2.LINE_AA)
+            error_text = status.thread_error[:80]
+            cv2.putText(frame, error_text, (badge_x2 + 6, text_y),
                         font, scale, error_color, thickness, cv2.LINE_AA)
             return
 

@@ -156,7 +156,14 @@ class Canvas:
 
 
 def _make_feather_mask(w: int, h: int, feather: int) -> np.ndarray:
-    """Returns a float32 (h,w) mask, 1.0 in centre fading to 0.0 at edges."""
+    """Center-weighted Gaussian falloff used to soften paste-back seams.
+
+    Returns a float32 ``(h, w)`` mask with peak ~1.0 in the middle that
+    falls off toward the edges. Despite the name this is *not* a true
+    distance-from-edge ramp — it's a Gaussian blur of an all-ones rectangle
+    whose center stays opaque while the borders tail off, which is what the
+    inpaint compositor needs to hide hard crop seams.
+    """
     mask = np.ones((h, w), dtype=np.float32)
     if feather > 1:
         ksize = feather * 4 + 1

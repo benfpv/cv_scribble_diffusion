@@ -1,7 +1,7 @@
 """Tests for the crop-region decision logic.
 
-The helper `decide_crop` mirrors the logic in App.async_diffusion exactly,
-letting us test every branch without starting the full pipeline.
+Wraps the real :func:`generation.decide_crop` so the existing test cases keep
+their concise signature while still exercising the production implementation.
 """
 
 import numpy as np
@@ -9,33 +9,22 @@ import cv2
 import pytest
 
 from config import AppConfig
+from generation import decide_crop as _decide_crop
 
 
-# -- helper mirroring App.async_diffusion crop logic ------------------------
+# -- adapter mirroring the legacy test signature ----------------------------
 
 def decide_crop(mask_gray, image_size, crop_pad, crop_area_threshold, crop_min_dim,
                 crop_alignment=8):
-    """Pure mirror of the crop decision logic from App.async_diffusion."""
-    nonzero = cv2.findNonZero(mask_gray)
-    if nonzero is None:
-        return False, None
-
-    bx, by, bw, bh = cv2.boundingRect(nonzero)
-    rx1 = max(0, bx - crop_pad)
-    ry1 = max(0, by - crop_pad)
-    rx2 = min(image_size[0], bx + bw + crop_pad)
-    ry2 = min(image_size[1], by + bh + crop_pad)
-    rw = (rx2 - rx1) // crop_alignment * crop_alignment
-    rh = (ry2 - ry1) // crop_alignment * crop_alignment
-    rx2 = rx1 + rw
-    ry2 = ry1 + rh
-
-    use_crop = (
-        rw * rh < int(crop_area_threshold * image_size[0] * image_size[1])
-        and rw >= crop_min_dim
-        and rh >= crop_min_dim
+    """Adapter: legacy 5-arg signature → ``generation.decide_crop`` plan tuple."""
+    plan = _decide_crop(
+        mask_gray, image_size,
+        crop_pad=crop_pad, crop_alignment=crop_alignment,
+        crop_area_threshold=crop_area_threshold, crop_min_dim=crop_min_dim,
     )
-    return use_crop, (rx1, ry1, rx2, ry2)
+    if plan is None:
+        return False, None
+    return plan.use_crop, plan.region
 
 
 def blank(size=(512, 512)):

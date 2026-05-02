@@ -6,16 +6,7 @@ import torch
 import animator as animator_module
 from animator import Animator
 from config import AppConfig, RevealConfig, UIConfig
-
-
-class _DecodeResult:
-    def __init__(self, sample):
-        self.sample = sample
-
-
-class DummyTAESD:
-    def decode(self, latents_tensor):
-        return _DecodeResult(latents_tensor)
+from conftest import DummyTAESD
 
 
 class FakeClock:

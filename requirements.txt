@@ -1,6 +1,6 @@
-numpy
-opencv-python
-pillow
-diffusers
-torch
-accelerate
+numpy>=1.24,<3
+opencv-python>=4.8,<5
+pillow>=10,<12
+diffusers>=0.25,<0.35
+torch>=2.1,<3
+accelerate>=0.25,<2
