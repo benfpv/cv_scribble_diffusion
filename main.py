@@ -53,6 +53,9 @@ class _DiffusionCancelled(Exception):
     """Raised inside the pipeline step callback to abort cleanly on shutdown."""
 
 
+_EXIT_CONFIRM_SECONDS = 2.5
+
+
 @dataclass
 class AppSnapshot:
     """Restorable app state used for undoing the last stroke."""
@@ -161,18 +164,21 @@ class App:
         low_byte = key_code & 0xFF
 
         if low_byte == 27:  # Esc
-            self.trigger_exit()
+            self._request_exit(source="Keyboard")
             return
 
         if low_byte == 32:  # Space
+            self._clear_exit_confirmation()
             if self._gen_state != GenState.RESETTING:
                 self._announce("Reset Canvas", source="Keyboard")
                 self.reset_canvas()
             return
         if low_byte in (13, 10):  # Enter
+            self._clear_exit_confirmation()
             self._save_image()
             return
         if low_byte == 9:  # Tab
+            self._clear_exit_confirmation()
             self.mask_visibility_toggle = not self.mask_visibility_toggle
             state = "On" if self.mask_visibility_toggle else "Off"
             self._announce(f"Toggle Mask Visibility [{state}]", source="Keyboard")
@@ -180,14 +186,17 @@ class App:
 
         # Undo: support Ctrl+Z (26), plain z/Z, and u/U as fallback.
         if low_byte in (26, ord("z"), ord("Z"), ord("u"), ord("U")):
+            self._clear_exit_confirmation()
             self._undo_last_stroke()
             return
 
         # Arrow keys can vary by backend; support common forms.
         if key_code in (2424832, 81):  # Left
+            self._clear_exit_confirmation()
             self._adjust_brush_thickness(-1)
             return
         if key_code in (2555904, 83):  # Right
+            self._clear_exit_confirmation()
             self._adjust_brush_thickness(1)
             return
 
@@ -198,26 +207,10 @@ class App:
         if event == cv2.EVENT_LBUTTONDOWN:
             action = self.ui.hit_test(x, y)
             if action == "exit":
-                now = time.time()
-                if now > self._exit_confirm_until:
-                    self._exit_confirm_stage = 0
-
-                # Two-click exit: first click arms, second click confirms.
-                if self._exit_confirm_stage >= 1:
-                    self._announce("Exiting", source="Toolbar")
-                    self._exit_confirm_stage = 0
-                    self._exit_confirm_until = 0.0
-                    self.trigger_exit()
-                else:
-                    self._exit_confirm_stage = 1
-                    self._exit_confirm_until = now + 2.5
-                    notice = "Click EXIT once more to confirm"
-                    self._announce(notice, source="Toolbar")
-                    self._set_ui_notice(notice, duration_s=2.5)
+                self._request_exit(source="Toolbar")
                 return
 
-            self._exit_confirm_stage = 0
-            self._exit_confirm_until = 0.0
+            self._clear_exit_confirmation()
             if action == "reset":
                 if self._gen_state != GenState.RESETTING:
                     self._announce("Reset Canvas", source="Toolbar")
@@ -305,6 +298,29 @@ class App:
         self._reset_ack.set()
         self._gen_done.set()
         logger.info("Exit triggered")
+
+    def _clear_exit_confirmation(self):
+        """Cancel any pending two-step exit confirmation."""
+        self._exit_confirm_stage = 0
+        self._exit_confirm_until = 0.0
+
+    def _request_exit(self, source: str):
+        """Arm or confirm exit through a shared two-step UX."""
+        now = time.time()
+        if now > self._exit_confirm_until:
+            self._clear_exit_confirmation()
+
+        if self._exit_confirm_stage >= 1:
+            self._announce("Exiting", source=source)
+            self._clear_exit_confirmation()
+            self.trigger_exit()
+            return
+
+        self._exit_confirm_stage = 1
+        self._exit_confirm_until = now + _EXIT_CONFIRM_SECONDS
+        notice = "Press Esc or click EXIT again to quit"
+        self._announce(notice, source=source)
+        self._set_ui_notice(notice, duration_s=_EXIT_CONFIRM_SECONDS)
 
     def _cycle_fps(self):
         """Cycle through the available FPS presets."""
@@ -638,7 +654,7 @@ class App:
 
             is_generating = self._gen_state == GenState.GENERATING
             if time.time() > self._exit_confirm_until:
-                self._exit_confirm_stage = 0
+                self._clear_exit_confirmation()
             exit_armed = self._exit_confirm_stage > 0
             button_states = {
                 "exit": exit_armed,
@@ -653,7 +669,7 @@ class App:
                 "fps": False,
             }
             button_labels = {
-                "exit": f"EXIT {self._exit_confirm_stage}/2" if exit_armed else "EXIT",
+                "exit": "QUIT?" if exit_armed else "EXIT",
                 "undo": "UNDO",
                 "steps_dec": "MAX-",
                 "steps_inc": "MAX+",

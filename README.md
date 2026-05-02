@@ -50,7 +50,7 @@ cv_scribble_diffusion/
    py main.py
    ```
 4. The first run may take a minute or two to load the models. Once the window appears, draw on it and images will be generated continuously in the background.
-5. Exit by pressing **Esc** in the window, or **Ctrl+C** in the terminal.
+5. Exit by pressing **Esc** twice in the window, clicking **EXIT** twice, or using **Ctrl+C** in the terminal.
 
 # Keyboard Inputs
 | Key | Action |
@@ -62,7 +62,7 @@ cv_scribble_diffusion/
 | **Ctrl+Z / Z / U** | Undo last stroke |
 | **Left arrow** | Decrease brush size |
 | **Right arrow** | Increase brush size |
-| **Esc** | Exit app |
+| **Esc** | Arm/confirm exit |
 
 # Known Limitations & Future Directions
 - **Power draw:** Consider a smaller model, lower generation frequency, or NPU offload.

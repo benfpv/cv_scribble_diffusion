@@ -136,6 +136,35 @@ def test_exit_requires_confirmation_click(app, monkeypatch):
     assert app.exit_triggered is True
 
 
+def test_escape_requires_confirmation(app):
+    app._handle_keypress(27)
+    assert app.exit_triggered is False
+    assert app._exit_confirm_stage == 1
+
+    app._handle_keypress(27)
+    assert app.exit_triggered is True
+
+
+def test_exit_confirmation_can_be_confirmed_across_inputs(app, monkeypatch):
+    monkeypatch.setattr(app.ui, "hit_test", lambda _x, _y: "exit")
+
+    app._handle_keypress(27)
+    assert app.exit_triggered is False
+
+    app.mouse_callback(cv2.EVENT_LBUTTONDOWN, 5, 5, 0, None)
+    assert app.exit_triggered is True
+
+
+def test_exit_confirmation_cancelled_by_other_action(app):
+    app._handle_keypress(27)
+    assert app._exit_confirm_stage == 1
+
+    app._handle_keypress(9)  # Tab toggles mask visibility
+    assert app.exit_triggered is False
+    assert app._exit_confirm_stage == 0
+    assert app._exit_confirm_until == 0.0
+
+
 def test_exit_confirmation_stage_resets_after_timeout(app, monkeypatch):
     monkeypatch.setattr(app.ui, "hit_test", lambda _x, _y: "exit")
     app.mouse_callback(cv2.EVENT_LBUTTONDOWN, 5, 5, 0, None)
