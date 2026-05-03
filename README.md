@@ -4,7 +4,9 @@ Real-time scribble-to-image generation with OpenCV, ControlNet scribble guidance
 
 Draw on the canvas and the app continuously generates imagery around your strokes. New results are blended in with a reveal animation so the output feels live and iterative.
 
-The app window includes a compact **SCR** identity rail on the left; the full window title and rail mark can be configured in `UIConfig` inside `config.py`.
+The app uses a borderless OpenCV window with a compact **SCR** identity rail on the left; the full window title, rail mark, and borderless mode can be configured in `UIConfig` inside `config.py`.
+
+The bottom prompt field lets you edit the generation prompt at runtime. `InferenceConfig.prompt` remains the startup default.
 
 https://github.com/user-attachments/assets/0743eba9-6edc-4657-a160-ae95a96438b4
 
@@ -67,20 +69,22 @@ Download and place these folders in the project root:
      py main.py
      ```
 
-First launch may take a while due to model initialization.
+First launch may take a while due to model initialization; the terminal shows a startup progress indicator while models and UI are loading.
 
 ## Controls
 
 ### Mouse
 
-- Left click + drag: draw strokes
+- Left click + drag: draw strokes; single click places a brush-sized point
+- Bottom prompt field: click to edit, drag to select prompt text, or double-click to select all
+- Clicking the canvas while editing the prompt applies the prompt and starts drawing immediately
 - Toolbar buttons (top strip):
     - `EXIT`: exit (multi-click confirmation)
     - `RESET`: clear canvas
-    - `SAVE`: save current image to `saved_image_N.png`
+    - `SAVE`: save current image to a timestamped `saved_image_*.png`
     - `MASK`: toggle mask visibility
     - `UNDO`: undo previous stroke
-    - `THIN` / `THICK`: adjust brush size
+    - `THIN` / `THICK`: adjust brush size; the dot between them previews the current point size
     - `MAX-` / `MAX+`: adjust runtime max diffusion steps
     - `FPS`: cycle display FPS presets
 
@@ -96,14 +100,19 @@ First launch may take a while due to model initialization.
 | `Right Arrow` | Increase brush thickness |
 | `Esc` | Arm/confirm exit (press twice to exit) |
 
+When the prompt field is active, text input edits the prompt instead of triggering shortcuts. `Enter` applies the prompt, `Esc` cancels the edit, `Ctrl+A` selects all prompt text, `Backspace` / `Delete` edit or clear selected text, and `Left` / `Right` move the prompt cursor. Prompt input is single-line and capped by `UIConfig.prompt_max_chars`.
+
+The status bar shows the current brush thickness as text, while the toolbar dot between `THIN` and `THICK` previews the actual current point size.
+Brush size is clamped by `UIConfig.min_brush_thickness` / `UIConfig.max_brush_thickness`, and `MAX+` can raise runtime diffusion steps up to `InferenceConfig.max_runtime_inference_steps`.
+
 ## Configuration
 
 Edit values in `config.py`:
 
 - `ModelConfig`: local model paths and GPU usage
-- `InferenceConfig`: prompt, guidance, crop behavior, step schedule
+- `InferenceConfig`: startup prompt, guidance, crop behavior, step schedule, runtime max-step ceiling
 - `RevealConfig`: reveal mode, interpolation, noise/outro tuning
-- `UIConfig`: image/present size, brush defaults, window settings (including SCR identity rail)
+- `UIConfig`: image/present size, brush defaults/limits, window settings including borderless mode, SCR identity rail, and prompt field sizing/limits
 
 ## Troubleshooting
 
