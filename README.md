@@ -8,7 +8,7 @@ The app uses a borderless OpenCV window with a compact **SCR** identity rail on 
 
 The bottom prompt field lets you edit the generation prompt at runtime. `InferenceConfig.prompt` remains the startup default.
 
-https://github.com/user-attachments/assets/0743eba9-6edc-4657-a160-ae95a96438b4
+https://github.com/user-attachments/assets/48eec732-5f17-479e-97df-87e2e0bcec09
 
 Inspired in part by projects such as [krita-ai-diffusion](https://github.com/Acly/krita-ai-diffusion/releases/tag/v1.9.0).
 
