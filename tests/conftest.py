@@ -4,8 +4,12 @@ import sys
 import os
 import time
 
-# Make the project root importable from any test file
-sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
+PROJECT_ROOT = os.path.dirname(os.path.dirname(__file__))
+SRC_ROOT = os.path.join(PROJECT_ROOT, "src")
+
+# Make the package importable from any test file, even outside pytest config.
+sys.path.insert(0, SRC_ROOT)
+sys.path.insert(0, PROJECT_ROOT)
 
 import pytest
 import torch

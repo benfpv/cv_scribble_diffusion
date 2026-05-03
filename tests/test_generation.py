@@ -3,8 +3,8 @@
 import numpy as np
 import pytest
 
-from config import AppConfig, UIConfig, InferenceConfig
-from generation import (
+from cv_scribble_diffusion.config import AppConfig, UIConfig, InferenceConfig
+from cv_scribble_diffusion.generation.inputs import (
     decide_crop, make_dilation_kernel, make_control_image,
     compute_dist_map_inputs, build_inpaint_inputs, present_bounds,
     CropPlan,

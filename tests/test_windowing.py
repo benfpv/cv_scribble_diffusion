@@ -2,7 +2,7 @@
 
 import cv2
 
-import windowing
+from cv_scribble_diffusion.ui import windowing
 
 
 class _FakeUser32:

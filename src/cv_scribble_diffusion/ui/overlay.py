@@ -10,7 +10,7 @@ from typing import Dict, List, Optional, Tuple
 import cv2
 import numpy as np
 
-from config import UIConfig
+from cv_scribble_diffusion.config import UIConfig
 
 
 @dataclass(frozen=True)

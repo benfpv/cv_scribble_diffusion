@@ -4,7 +4,7 @@ import logging
 import os
 from logging.handlers import RotatingFileHandler
 
-from config import LoggingConfig
+from cv_scribble_diffusion.config import LoggingConfig
 
 
 _CONFIGURED = False

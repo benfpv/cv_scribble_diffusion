@@ -8,8 +8,8 @@ import numpy as np
 import cv2
 import pytest
 
-from config import AppConfig
-from generation import decide_crop as _decide_crop
+from cv_scribble_diffusion.config import AppConfig
+from cv_scribble_diffusion.generation.inputs import decide_crop as _decide_crop
 
 
 # -- adapter mirroring the legacy test signature ----------------------------

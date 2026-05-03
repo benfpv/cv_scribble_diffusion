@@ -3,8 +3,8 @@
 import numpy as np
 import pytest
 
-from config import AppConfig, UIConfig
-from ui import UIOverlay, ButtonDef, StatusInfo, PromptInfo
+from cv_scribble_diffusion.config import AppConfig, UIConfig
+from cv_scribble_diffusion.ui.overlay import UIOverlay, ButtonDef, StatusInfo, PromptInfo
 
 
 def make_ui(cfg: UIConfig = None) -> UIOverlay:

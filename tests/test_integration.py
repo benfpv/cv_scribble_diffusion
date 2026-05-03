@@ -10,8 +10,8 @@ import pytest
 
 import cv2
 
-from config import AppConfig, UIConfig, InferenceConfig, RevealConfig
-from main import App, GenState, _CLOSING_NOTICE
+from cv_scribble_diffusion.config import AppConfig, UIConfig, InferenceConfig, RevealConfig
+from cv_scribble_diffusion.app.app import App, GenState, _CLOSING_NOTICE
 
 
 def _make_cfg():
@@ -31,14 +31,14 @@ def _make_cfg():
 @pytest.fixture
 def app(monkeypatch, patch_cv_window, mock_pipeline_cls):
     """Create an App with mocked pipeline and OpenCV window."""
-    monkeypatch.setattr("main.DiffusionPipeline", mock_pipeline_cls)
+    monkeypatch.setattr("cv_scribble_diffusion.app.app.DiffusionPipeline", mock_pipeline_cls)
     return App(_make_cfg())
 
 
 @pytest.fixture
 def failing_app(monkeypatch, patch_cv_window, failing_pipeline_cls):
     """Create an App whose pipeline fails on first generation."""
-    monkeypatch.setattr("main.DiffusionPipeline", failing_pipeline_cls)
+    monkeypatch.setattr("cv_scribble_diffusion.app.app.DiffusionPipeline", failing_pipeline_cls)
     return App(_make_cfg())
 
 
@@ -99,7 +99,7 @@ def test_app_creates_window_with_configured_borderless_flag(monkeypatch, patch_c
     captured = {}
     cfg = _make_cfg()
     cfg.ui.borderless_window = False
-    monkeypatch.setattr("main.DiffusionPipeline", mock_pipeline_cls)
+    monkeypatch.setattr("cv_scribble_diffusion.app.app.DiffusionPipeline", mock_pipeline_cls)
 
     def fake_create_app_window(window_name, window_size, borderless=True):
         captured["window_name"] = window_name
@@ -107,7 +107,7 @@ def test_app_creates_window_with_configured_borderless_flag(monkeypatch, patch_c
         captured["borderless"] = borderless
         return False
 
-    monkeypatch.setattr("main.create_app_window", fake_create_app_window)
+    monkeypatch.setattr("cv_scribble_diffusion.app.app.create_app_window", fake_create_app_window)
     App(cfg)
 
     assert captured == {
@@ -189,15 +189,15 @@ def test_stroke_preserved_when_cursor_leaves_canvas(app):
     move_x, move_y = _canvas_point(app, 18, 20)
     app.mouse_callback(cv2.EVENT_LBUTTONDOWN, x, y, 0, None)
     app.mouse_callback(cv2.EVENT_MOUSEMOVE, move_x, move_y, 0, None)
-    
+
     # Commit active strokes so they land in the persistent mask.
     app.canvas.commit_active_to_mask()
     mask_before = app.canvas.mask.copy()
     assert np.count_nonzero(mask_before) > 0, "Stroke should be in persistent mask"
-    
+
     # Move outside canvas bounds—stroke should be committed, not discarded.
     app.mouse_callback(cv2.EVENT_MOUSEMOVE, 5, 50, 0, None)
-    
+
     # Pixels drawn before leaving canvas must still be present.
     assert np.array_equal(app.canvas.mask >= mask_before, np.ones_like(mask_before, dtype=bool)), \
         "Leaving canvas must not erase previously committed strokes"
@@ -648,7 +648,7 @@ def test_canvas_clamps_out_of_bounds_coords(app):
 
 def test_reset_during_generation_does_not_commit_stale_result(monkeypatch, patch_cv_window, slow_pipeline_cls):
     """Resetting mid-generation should keep the reset canvas, not stale output."""
-    monkeypatch.setattr("main.DiffusionPipeline", slow_pipeline_cls)
+    monkeypatch.setattr("cv_scribble_diffusion.app.app.DiffusionPipeline", slow_pipeline_cls)
     app = App(_make_cfg())
 
     app.canvas.mask[20:40, 20:40] = 150
@@ -690,7 +690,7 @@ def test_consecutive_failure_increments_and_records_error(
     monkeypatch, patch_cv_window, always_failing_pipeline_cls,
 ):
     """AlwaysFailingPipeline should increment _consecutive_failures each cycle."""
-    monkeypatch.setattr("main.DiffusionPipeline", always_failing_pipeline_cls)
+    monkeypatch.setattr("cv_scribble_diffusion.app.app.DiffusionPipeline", always_failing_pipeline_cls)
     app = App(_make_cfg())
     app.canvas.mask[20:30, 20:30] = 150
     app._gen_state = GenState.READY
@@ -716,7 +716,7 @@ def test_consecutive_failure_triggers_ui_notice_after_threshold(
     monkeypatch, patch_cv_window, always_failing_pipeline_cls,
 ):
     """After _max_consecutive_failures, a UI notice should be set."""
-    monkeypatch.setattr("main.DiffusionPipeline", always_failing_pipeline_cls)
+    monkeypatch.setattr("cv_scribble_diffusion.app.app.DiffusionPipeline", always_failing_pipeline_cls)
     app = App(_make_cfg())
     app._max_consecutive_failures = 2  # lower threshold for faster test
     app.canvas.mask[20:30, 20:30] = 150
@@ -883,7 +883,7 @@ def test_stop_event_during_pipeline_cancels_cleanly(
             from PIL import Image
             return Image.new("RGB", (64, 64), (128, 128, 128))
 
-    monkeypatch.setattr("main.DiffusionPipeline", StopDuringStepPipeline)
+    monkeypatch.setattr("cv_scribble_diffusion.app.app.DiffusionPipeline", StopDuringStepPipeline)
     app = App(_make_cfg())
     app.canvas.mask[20:30, 20:30] = 150
     app._gen_state = GenState.READY

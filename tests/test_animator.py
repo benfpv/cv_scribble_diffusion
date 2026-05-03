@@ -3,9 +3,9 @@
 import numpy as np
 import torch
 
-import animator as animator_module
-from animator import Animator
-from config import AppConfig, RevealConfig, UIConfig
+from cv_scribble_diffusion.ui import animator as animator_module
+from cv_scribble_diffusion.ui.animator import Animator
+from cv_scribble_diffusion.config import AppConfig, RevealConfig, UIConfig
 from conftest import DummyTAESD
 
 

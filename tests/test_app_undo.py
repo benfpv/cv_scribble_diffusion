@@ -4,8 +4,8 @@ import numpy as np
 import cv2
 import pytest
 
-from config import AppConfig, UIConfig, InferenceConfig, RevealConfig
-from main import App, GenState
+from cv_scribble_diffusion.config import AppConfig, UIConfig, InferenceConfig, RevealConfig
+from cv_scribble_diffusion.app.app import App, GenState
 
 
 def _make_cfg():
@@ -18,7 +18,7 @@ def _make_cfg():
 
 @pytest.fixture
 def app(monkeypatch, patch_cv_window, mock_pipeline_cls):
-    monkeypatch.setattr("main.DiffusionPipeline", mock_pipeline_cls)
+    monkeypatch.setattr("cv_scribble_diffusion.app.app.DiffusionPipeline", mock_pipeline_cls)
     return App(_make_cfg())
 
 
@@ -46,7 +46,7 @@ def test_undo_with_empty_history_is_noop(app):
 
 
 def test_undo_during_generation_restores_after_reset(monkeypatch, patch_cv_window, slow_pipeline_cls):
-    monkeypatch.setattr("main.DiffusionPipeline", slow_pipeline_cls)
+    monkeypatch.setattr("cv_scribble_diffusion.app.app.DiffusionPipeline", slow_pipeline_cls)
     app = App(_make_cfg())
 
     x, y = _canvas_point(app)

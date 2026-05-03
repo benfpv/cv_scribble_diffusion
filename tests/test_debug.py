@@ -5,8 +5,8 @@ import os
 import numpy as np
 from PIL import Image
 
-from config import DebugConfig
-from debug import DebugWriter, _write_image
+from cv_scribble_diffusion.config import DebugConfig
+from cv_scribble_diffusion.infra.debug import DebugWriter, _write_image
 
 
 def test_debug_writer_disabled_is_noop(tmp_path):
@@ -38,8 +38,8 @@ def test_write_image_rgb_array_uses_rgb_to_bgr(monkeypatch, tmp_path):
         captured["array"] = arr.copy()
         return True
 
-    monkeypatch.setattr("debug.rgb_to_bgr", fake_rgb_to_bgr)
-    monkeypatch.setattr("debug.cv2.imwrite", fake_imwrite)
+    monkeypatch.setattr("cv_scribble_diffusion.infra.debug.rgb_to_bgr", fake_rgb_to_bgr)
+    monkeypatch.setattr("cv_scribble_diffusion.infra.debug.cv2.imwrite", fake_imwrite)
 
     image = np.zeros((4, 4, 3), dtype=np.uint8)
     out_path = str(tmp_path / "rgb.png")

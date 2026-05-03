@@ -5,8 +5,8 @@ import types
 import torch
 from PIL import Image
 
-from config import AppConfig, InferenceConfig, ModelConfig
-import pipeline as pipeline_module
+from cv_scribble_diffusion.config import AppConfig, InferenceConfig, ModelConfig
+from cv_scribble_diffusion.generation import pipeline as pipeline_module
 
 
 class FakeControlNetModel:

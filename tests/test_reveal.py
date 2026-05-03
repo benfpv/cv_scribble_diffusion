@@ -4,7 +4,7 @@ import numpy as np
 import cv2
 import pytest
 
-from reveal import (
+from cv_scribble_diffusion.generation.reveal import (
     compute_reveal,
     build_dist_map,
     ease_progress,
@@ -219,7 +219,7 @@ def test_build_dist_map_mode_4_shards():
 
 
 def test_make_stochastic_noise_dispatches_correctly():
-    from reveal import make_stochastic_noise
+    from cv_scribble_diffusion.generation.reveal import make_stochastic_noise
     # mode 2 → fractal
     n2 = make_stochastic_noise(32, 32, 16, 16, reveal_mode=2)
     assert n2.shape == (32, 32)

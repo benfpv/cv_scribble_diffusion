@@ -3,8 +3,8 @@
 import logging
 from logging.handlers import RotatingFileHandler
 
-from config import LoggingConfig
-import runtime_logging as runtime_logging_module
+from cv_scribble_diffusion.config import LoggingConfig
+from cv_scribble_diffusion.infra import runtime_logging as runtime_logging_module
 
 
 def test_configure_logging_disabled_is_noop(tmp_path):

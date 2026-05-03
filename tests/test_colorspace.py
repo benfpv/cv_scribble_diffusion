@@ -2,7 +2,7 @@
 
 import numpy as np
 
-from colorspace import rgb_to_bgr, gray_to_rgb, gray_to_bgr
+from cv_scribble_diffusion.utils.colorspace import rgb_to_bgr, gray_to_rgb, gray_to_bgr
 
 
 def test_rgb_to_bgr_swaps_channels():

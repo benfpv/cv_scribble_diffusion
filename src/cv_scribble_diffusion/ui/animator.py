@@ -14,10 +14,12 @@ import numpy as np
 import cv2
 import torch
 
-from colorspace import rgb_to_bgr
-from config import AppConfig
-from reveal import build_dist_map, compute_reveal, ease_progress, compute_outro_duration
-from runtime_logging import get_logger
+from cv_scribble_diffusion.utils.colorspace import rgb_to_bgr
+from cv_scribble_diffusion.config import AppConfig
+from cv_scribble_diffusion.generation.reveal import (
+    build_dist_map, compute_reveal, ease_progress, compute_outro_duration,
+)
+from cv_scribble_diffusion.infra.runtime_logging import get_logger
 
 
 logger = get_logger(__name__)

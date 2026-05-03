@@ -6,8 +6,8 @@ import numpy as np
 import cv2
 from PIL import Image
 
-from colorspace import gray_to_bgr
-from config import AppConfig
+from cv_scribble_diffusion.utils.colorspace import gray_to_bgr
+from cv_scribble_diffusion.config import AppConfig
 
 
 @dataclass

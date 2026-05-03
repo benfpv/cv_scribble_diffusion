@@ -4,7 +4,7 @@ Real-time scribble-to-image generation with OpenCV, ControlNet scribble guidance
 
 Draw on the canvas and the app continuously generates imagery around your strokes. New results are blended in with a reveal animation so the output feels live and iterative.
 
-The app uses a borderless OpenCV window with a compact **SCR** identity rail on the left; the full window title, rail mark, and borderless mode can be configured in `UIConfig` inside `config.py`.
+The app uses a borderless OpenCV window with a compact **SCR** identity rail on the left; the full window title, rail mark, and borderless mode can be configured in `UIConfig` inside `src/cv_scribble_diffusion/config.py`.
 
 The bottom prompt field lets you edit the generation prompt at runtime. `InferenceConfig.prompt` remains the startup default.
 
@@ -14,14 +14,13 @@ Inspired in part by projects such as [krita-ai-diffusion](https://github.com/Acl
 
 ## Repository Overview
 
-- `main.py`: app lifecycle, toolbar input, keyboard shortcuts, generation loop
-- `pipeline.py`: model loading and inpaint execution
-- `canvas.py`: stroke masks, brush behavior, image compositing helpers
-- `animator.py`: reveal/interpolation animation pipeline
-- `reveal.py`: reveal map and blend math
-- `config.py`: centralized app settings (`ModelConfig`, `InferenceConfig`, `RevealConfig`, `UIConfig`)
-- `generation.py`: crop planning, mask dilation, and inpaint assembly helpers
-- `ui.py`: window composition and toolbar rendering
+- `main.py`: thin compatibility launcher for running from the repository root
+- `src/cv_scribble_diffusion/app/`: app lifecycle, startup progress, toolbar input, keyboard shortcuts, and generation loop
+- `src/cv_scribble_diffusion/generation/`: model loading, crop planning, mask dilation, reveal math, and inpaint input assembly
+- `src/cv_scribble_diffusion/ui/`: OpenCV window management, canvas/stroke behavior, frame composition, toolbar rendering, and reveal animation
+- `src/cv_scribble_diffusion/infra/`: runtime logging and optional debug image writing
+- `src/cv_scribble_diffusion/utils/`: small shared helpers such as color-space conversion
+- `src/cv_scribble_diffusion/config.py`: centralized app settings (`ModelConfig`, `InferenceConfig`, `RevealConfig`, `UIConfig`)
 - `tests/`: unit and integration coverage for layout, generation helpers, undo, logging, and pipeline wiring
 - `requirements.txt`: Python dependencies
 
@@ -38,7 +37,7 @@ Download and place these folders in the project root:
 
 `madebyollin/taesd` is downloaded automatically on first run.
 
-> **Note:** To use a different base model or ControlNet, update `ModelConfig.pipe_path` / `ModelConfig.scribble_path` in `config.py` and adjust `pipeline.py` as needed.
+> **Note:** To use a different base model or ControlNet, update `ModelConfig.pipe_path` / `ModelConfig.scribble_path` in `src/cv_scribble_diffusion/config.py` and adjust `src/cv_scribble_diffusion/generation/pipeline.py` as needed.
 
 ## Requirements
 
@@ -69,6 +68,8 @@ Download and place these folders in the project root:
      py main.py
      ```
 
+     After installing the project as a package, `python -m cv_scribble_diffusion` also starts the app.
+
 First launch may take a while due to model initialization; the terminal shows a startup progress indicator while models and UI are loading.
 
 ## Controls
@@ -79,7 +80,7 @@ First launch may take a while due to model initialization; the terminal shows a 
 - Bottom prompt field: click to edit, drag to select prompt text, or double-click to select all
 - Clicking the canvas while editing the prompt applies the prompt and starts drawing immediately
 - Toolbar buttons (top strip):
-    - `EXIT`: exit (multi-click confirmation)
+    - `EXIT`: exit (two-click confirmation)
     - `RESET`: clear canvas
     - `SAVE`: save current image to a timestamped `saved_image_*.png`
     - `MASK`: toggle mask visibility
@@ -107,7 +108,7 @@ Brush size is clamped by `UIConfig.min_brush_thickness` / `UIConfig.max_brush_th
 
 ## Configuration
 
-Edit values in `config.py`:
+Edit values in `src/cv_scribble_diffusion/config.py`:
 
 - `ModelConfig`: local model paths and GPU usage
 - `InferenceConfig`: startup prompt, guidance, crop behavior, step schedule, runtime max-step ceiling

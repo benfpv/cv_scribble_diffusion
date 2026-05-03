@@ -12,8 +12,8 @@ import cv2
 import numpy as np
 from PIL import Image
 
-from colorspace import gray_to_rgb
-from config import InferenceConfig, UIConfig
+from cv_scribble_diffusion.utils.colorspace import gray_to_rgb
+from cv_scribble_diffusion.config import InferenceConfig, UIConfig
 
 
 CropRegion = Tuple[int, int, int, int]

@@ -10,8 +10,8 @@ from diffusers import (
     AutoencoderTiny,
 )
 
-from config import AppConfig
-from runtime_logging import get_logger
+from cv_scribble_diffusion.config import AppConfig
+from cv_scribble_diffusion.infra.runtime_logging import get_logger
 
 
 logger = get_logger(__name__)

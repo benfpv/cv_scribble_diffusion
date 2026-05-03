@@ -3,8 +3,8 @@
 import numpy as np
 import pytest
 
-from config import AppConfig, UIConfig
-from canvas import Canvas
+from cv_scribble_diffusion.config import AppConfig, UIConfig
+from cv_scribble_diffusion.ui.canvas import Canvas
 
 
 def make_canvas() -> Canvas:
@@ -314,7 +314,7 @@ def test_commit_saturates_at_255_via_cv2_add():
 # -- patch_image and feather mask -------------------------------------------
 
 def test_make_feather_mask_shape_and_range():
-    from canvas import _make_feather_mask
+    from cv_scribble_diffusion.ui.canvas import _make_feather_mask
     mask = _make_feather_mask(64, 64, feather=8)
     assert mask.shape == (64, 64)
     assert mask.dtype == np.float32
@@ -324,19 +324,19 @@ def test_make_feather_mask_shape_and_range():
 
 def test_make_feather_mask_with_feather_is_uniform_ones():
     """GaussianBlur with BORDER_REFLECT on all-ones always returns all-ones."""
-    from canvas import _make_feather_mask
+    from cv_scribble_diffusion.ui.canvas import _make_feather_mask
     mask = _make_feather_mask(32, 32, feather=8)
     assert np.allclose(mask, 1.0)
 
 
 def test_make_feather_mask_no_feather():
-    from canvas import _make_feather_mask
+    from cv_scribble_diffusion.ui.canvas import _make_feather_mask
     mask = _make_feather_mask(32, 32, feather=0)
     assert np.allclose(mask, 1.0)
 
 
 def test_make_feather_mask_feather_one():
-    from canvas import _make_feather_mask
+    from cv_scribble_diffusion.ui.canvas import _make_feather_mask
     mask = _make_feather_mask(32, 32, feather=1)
     assert np.allclose(mask, 1.0)  # feather <= 1 skips blur
 

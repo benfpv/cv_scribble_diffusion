@@ -11,9 +11,9 @@ import cv2
 import numpy as np
 from PIL import Image, ImageDraw
 
-from config import DebugConfig
-from colorspace import rgb_to_bgr
-from runtime_logging import get_logger
+from cv_scribble_diffusion.config import DebugConfig
+from cv_scribble_diffusion.utils.colorspace import rgb_to_bgr
+from cv_scribble_diffusion.infra.runtime_logging import get_logger
 
 
 logger = get_logger(__name__)

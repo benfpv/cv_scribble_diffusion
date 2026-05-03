@@ -1,6 +1,6 @@
 """Tests for centralised configuration dataclasses."""
 
-from config import (
+from cv_scribble_diffusion.config import (
     AppConfig, ModelConfig, InferenceConfig, RevealConfig,
     UIConfig, DebugConfig, LoggingConfig,
 )
