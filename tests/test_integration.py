@@ -11,7 +11,7 @@ import pytest
 import cv2
 
 from config import AppConfig, UIConfig, InferenceConfig, RevealConfig
-from main import App, GenState
+from main import App, GenState, _CLOSING_NOTICE
 
 
 def _make_cfg():
@@ -79,7 +79,43 @@ def _canvas_point(app, x=8, y=10):
     return app.ui.canvas_x_offset + x, app.ui.canvas_y_offset + y
 
 
+def _prompt_point(app, x=12, y=12):
+    x1, y1, _x2, _y2 = app.ui.prompt_box_rect
+    return x1 + x, y1 + y
+
+
+def _replace_prompt(app, text):
+    app._begin_prompt_edit(0)
+    app._prompt_draft = ""
+    app._prompt_cursor = 0
+    for ch in text:
+        app._handle_keypress(ord(ch))
+    app._handle_keypress(13)
+
+
 # -- GenState transitions ----------------------------------------------------
+
+def test_app_creates_window_with_configured_borderless_flag(monkeypatch, patch_cv_window, mock_pipeline_cls):
+    captured = {}
+    cfg = _make_cfg()
+    cfg.ui.borderless_window = False
+    monkeypatch.setattr("main.DiffusionPipeline", mock_pipeline_cls)
+
+    def fake_create_app_window(window_name, window_size, borderless=True):
+        captured["window_name"] = window_name
+        captured["window_size"] = window_size
+        captured["borderless"] = borderless
+        return False
+
+    monkeypatch.setattr("main.create_app_window", fake_create_app_window)
+    App(cfg)
+
+    assert captured == {
+        "window_name": cfg.ui.window_name,
+        "window_size": cfg.ui.window_size,
+        "borderless": False,
+    }
+
 
 def test_initial_state_is_idle(app):
     assert app._gen_state == GenState.IDLE
@@ -96,6 +132,38 @@ def test_drawing_resets_inference_steps_to_min(app):
     x, y = _canvas_point(app)
     app.mouse_callback(cv2.EVENT_LBUTTONDOWN, x, y, 0, None)
     assert app._inference_steps == app.cfg.inference.min_inference_steps
+
+
+def test_click_without_mousemove_draws_brush_sized_point(app):
+    app.canvas.set_brush_thickness(10)
+    x, y = _canvas_point(app, 24, 24)
+
+    app.mouse_callback(cv2.EVENT_LBUTTONDOWN, x, y, 0, None)
+    app.mouse_callback(cv2.EVENT_LBUTTONUP, x, y, 0, None)
+
+    ys, xs = np.nonzero(app.canvas.mask)
+    assert xs.size > 1
+    width = xs.max() - xs.min() + 1
+    height = ys.max() - ys.min() + 1
+    assert width >= app.canvas.brush_stroke_thickness
+    assert height >= app.canvas.brush_stroke_thickness
+
+
+def test_mouseup_commits_final_segment_without_waiting_for_display_loop(app):
+    app.canvas.set_brush_thickness(8)
+    x1, y1 = _canvas_point(app, 10, 10)
+    x2, y2 = _canvas_point(app, 40, 10)
+
+    app.mouse_callback(cv2.EVENT_LBUTTONDOWN, x1, y1, 0, None)
+    app.canvas.commit_active_to_mask()
+    mask_after_initial_point = app.canvas.mask.copy()
+    app.mouse_callback(cv2.EVENT_MOUSEMOVE, x2, y2, 0, None)
+    app.mouse_callback(cv2.EVENT_LBUTTONUP, x2, y2, 0, None)
+
+    assert np.count_nonzero(app.canvas.mask) > np.count_nonzero(mask_after_initial_point)
+    assert app.canvas.drawing is False
+    assert app.canvas.has_active_strokes is False
+    assert not np.any(app.canvas.mask_active)
 
 
 def test_stroke_stops_when_cursor_leaves_canvas(app):
@@ -144,6 +212,7 @@ def test_exit_requires_confirmation_click(app, monkeypatch):
 
     app.mouse_callback(cv2.EVENT_LBUTTONDOWN, 5, 5, 0, None)
     assert app.exit_triggered is True
+    assert app._current_ui_notice() == _CLOSING_NOTICE
 
 
 def test_escape_requires_confirmation(app):
@@ -153,6 +222,33 @@ def test_escape_requires_confirmation(app):
 
     app._handle_keypress(27)
     assert app.exit_triggered is True
+    assert app._current_ui_notice() == _CLOSING_NOTICE
+
+
+def test_show_closing_frame_renders_shutdown_notice(app, monkeypatch):
+    captured = {}
+
+    def fake_compose(display_frame, canvas_notice=None):
+        captured["display_shape"] = display_frame.shape
+        captured["canvas_notice"] = canvas_notice
+        width, height = app.cfg.ui.window_size
+        return np.zeros((height, width, 3), dtype=np.uint8)
+
+    def fake_imshow(window_name, frame):
+        captured["window_name"] = window_name
+        captured["frame_shape"] = frame.shape
+
+    monkeypatch.setattr(app, "_compose_window_frame", fake_compose)
+    monkeypatch.setattr(cv2, "imshow", fake_imshow)
+    monkeypatch.setattr(cv2, "waitKeyEx", lambda _delay: -1)
+
+    display_frame = np.zeros((*app.cfg.ui.present_size, 3), dtype=np.uint8)
+    app._show_closing_frame(display_frame)
+
+    assert captured["canvas_notice"] == _CLOSING_NOTICE
+    assert captured["display_shape"] == display_frame.shape
+    assert captured["window_name"] == app.cfg.ui.window_name
+    assert captured["frame_shape"] == (app.cfg.ui.window_size[1], app.cfg.ui.window_size[0], 3)
 
 
 def test_exit_confirmation_can_be_confirmed_across_inputs(app, monkeypatch):
@@ -185,6 +281,221 @@ def test_exit_confirmation_stage_resets_after_timeout(app, monkeypatch):
     app.mouse_callback(cv2.EVENT_LBUTTONDOWN, 5, 5, 0, None)
     assert app.exit_triggered is False
     assert app._exit_confirm_stage == 1
+
+
+# -- prompt editing ----------------------------------------------------------
+
+def test_prompt_box_click_focuses_editor(app):
+    x, y = _prompt_point(app)
+    app.mouse_callback(cv2.EVENT_LBUTTONDOWN, x, y, 0, None)
+    assert app._prompt_editing is True
+
+
+def test_prompt_enter_commits_keyboard_text(app):
+    _replace_prompt(app, "neon city")
+    assert app._generation_prompt() == "neon city"
+    assert app._prompt_editing is False
+
+
+def test_prompt_escape_cancels_without_arming_exit(app):
+    original_prompt = app._generation_prompt()
+    app._begin_prompt_edit(0)
+    app._insert_prompt_char("x")
+
+    app._handle_keypress(27)
+
+    assert app._generation_prompt() == original_prompt
+    assert app._prompt_editing is False
+    assert app.exit_triggered is False
+    assert app._exit_confirm_stage == 0
+
+
+def test_prompt_input_is_capped_at_configured_max(app):
+    max_chars = app.cfg.ui.prompt_max_chars
+    app._begin_prompt_edit(0)
+    app._prompt_draft = ""
+    app._prompt_cursor = 0
+
+    for _ in range(max_chars + 5):
+        app._handle_keypress(ord("x"))
+
+    assert len(app._prompt_draft) == max_chars
+    assert app._prompt_cursor == max_chars
+
+
+def test_prompt_editing_supports_cursor_backspace_and_delete(app):
+    _replace_prompt(app, "abcd")
+    app._begin_prompt_edit(2)
+
+    app._handle_keypress(8)  # Backspace removes b
+    assert app._prompt_draft == "acd"
+    assert app._prompt_cursor == 1
+
+    app._handle_keypress(2555904)  # Right arrow to c|d
+    app._handle_keypress(3014656)  # Delete removes d
+    assert app._prompt_draft == "ac"
+    assert app._prompt_cursor == 2
+
+
+def test_prompt_cleaning_removes_newlines_and_non_ascii(app):
+    dirty = "line one\nline two caf\u00e9"
+    cleaned = app._clean_prompt_text(dirty)
+    assert cleaned == "line one line two caf"
+
+
+def test_prompt_home_end_keys_move_cursor(app):
+    _replace_prompt(app, "abcdef")
+    app._begin_prompt_edit(3)
+
+    app._handle_keypress(2359296)  # Home
+    assert app._prompt_cursor == 0
+
+    app._handle_keypress(2293760)  # End
+    assert app._prompt_cursor == len(app._prompt_draft)
+
+
+def test_prompt_ctrl_a_selects_all_and_typing_replaces(app):
+    _replace_prompt(app, "neon city")
+    app._begin_prompt_edit(0)
+
+    app._handle_keypress(1)  # Ctrl+A
+    assert app._prompt_selection_bounds() == (0, len("neon city"))
+
+    app._handle_keypress(ord("x"))
+    assert app._prompt_draft == "x"
+    assert app._prompt_cursor == 1
+    assert app._prompt_selection_bounds() is None
+
+
+def test_prompt_selected_text_can_be_deleted_with_backspace_or_delete(app):
+    _replace_prompt(app, "abcdef")
+    app._begin_prompt_edit(0)
+    app._prompt_cursor = 4
+    app._prompt_selection_anchor = 1
+
+    app._handle_keypress(8)
+    assert app._prompt_draft == "aef"
+    assert app._prompt_cursor == 1
+    assert app._prompt_selection_bounds() is None
+
+    app._prompt_cursor = 3
+    app._prompt_selection_anchor = 1
+    app._handle_keypress(3014656)  # Delete
+    assert app._prompt_draft == "a"
+    assert app._prompt_cursor == 1
+    assert app._prompt_selection_bounds() is None
+
+
+def test_prompt_arrow_keys_collapse_selection(app):
+    _replace_prompt(app, "abcdef")
+    app._begin_prompt_edit(0)
+    app._prompt_cursor = 5
+    app._prompt_selection_anchor = 2
+
+    app._handle_keypress(2424832)  # Left arrow
+    assert app._prompt_cursor == 2
+    assert app._prompt_selection_bounds() is None
+
+    app._prompt_cursor = 1
+    app._prompt_selection_anchor = 4
+    app._handle_keypress(2555904)  # Right arrow
+    assert app._prompt_cursor == 4
+    assert app._prompt_selection_bounds() is None
+
+
+def test_prompt_double_click_selects_all(app):
+    _replace_prompt(app, "blue lake")
+    x, y = _prompt_point(app)
+
+    app.mouse_callback(cv2.EVENT_LBUTTONDBLCLK, x, y, 0, None)
+
+    assert app._prompt_editing is True
+    assert app._prompt_selection_bounds() == (0, len("blue lake"))
+
+
+def test_prompt_mouse_drag_selects_and_replaces_text(app, monkeypatch):
+    _replace_prompt(app, "crystal forest")
+    monkeypatch.setattr(
+        app.ui, "prompt_cursor_index",
+        lambda text, x, cursor, max_chars: 0 if x < 50 else len(text),
+    )
+    x1, y1, _x2, _y2 = app.ui.prompt_box_rect
+    y = y1 + 12
+
+    app.mouse_callback(cv2.EVENT_LBUTTONDOWN, x1 + 1, y, 0, None)
+    app.mouse_callback(cv2.EVENT_MOUSEMOVE, 100, y, 0, None)
+    app.mouse_callback(cv2.EVENT_LBUTTONUP, 100, y, 0, None)
+
+    assert app._prompt_selection_bounds() == (0, len("crystal forest"))
+
+    for ch in "mist":
+        app._handle_keypress(ord(ch))
+    assert app._prompt_draft == "mist"
+    assert app._prompt_selection_bounds() is None
+
+
+def test_prompt_replacing_selection_can_edit_at_character_limit(app):
+    max_chars = app.cfg.ui.prompt_max_chars
+    app._begin_prompt_edit(0)
+    app._prompt_draft = "x" * max_chars
+    app._prompt_cursor = max_chars
+    app._prompt_selection_anchor = max_chars - 1
+
+    app._handle_keypress(ord("y"))
+
+    assert len(app._prompt_draft) == max_chars
+    assert app._prompt_draft.endswith("y")
+    assert app._prompt_cursor == max_chars
+    assert app._prompt_selection_bounds() is None
+
+
+def test_prompt_clicking_canvas_commits_and_starts_drawing(app):
+    app._begin_prompt_edit(0)
+    app._prompt_draft = "blue lake"
+    app._prompt_cursor = len(app._prompt_draft)
+    x, y = _canvas_point(app)
+
+    app.mouse_callback(cv2.EVENT_LBUTTONDOWN, x, y, 0, None)
+
+    assert app._generation_prompt() == "blue lake"
+    assert app._prompt_editing is False
+    assert app.canvas.drawing is True
+
+
+def test_prompt_selection_does_not_block_next_canvas_stroke(app):
+    _replace_prompt(app, "blue lake")
+    app._begin_prompt_edit(0)
+    app._select_prompt_all()
+    x, y = _canvas_point(app)
+
+    app.mouse_callback(cv2.EVENT_LBUTTONDOWN, x, y, 0, None)
+
+    assert app._generation_prompt() == "blue lake"
+    assert app._prompt_editing is False
+    assert app._prompt_selection_bounds() is None
+    assert app.canvas.drawing is True
+
+
+def test_prompt_commit_marks_existing_mask_ready(app):
+    app.canvas.mask[5:10, 5:10] = 255
+    app._gen_state = GenState.IDLE
+    app._inference_steps = 10
+
+    _replace_prompt(app, "ink sketch")
+
+    assert app._gen_state == GenState.READY
+    assert app._inference_steps == app.cfg.inference.min_inference_steps
+
+
+def test_generation_uses_committed_runtime_prompt(app):
+    _replace_prompt(app, "crystal forest")
+    app.canvas.mask[20:30, 20:30] = 150
+    app._gen_state = GenState.READY
+    app._reset_ack.set()
+
+    _run_one_generation(app)
+
+    assert app.pipe.prompts[-1] == "crystal forest"
 
 
 def test_adjust_max_inference_steps_clamps_runtime_state(app):
@@ -502,10 +813,22 @@ def test_adjust_max_inference_steps_increase(app):
 
 
 def test_adjust_max_inference_steps_caps_at_runtime_ceiling(app):
-    """Runtime cap is max(cfg.max_inference_steps, 30)."""
-    runtime_cap = max(app.cfg.inference.max_inference_steps, 30)
+    """Runtime cap comes from the explicit config ceiling."""
+    runtime_cap = app.cfg.inference.runtime_step_cap
     app._adjust_max_inference_steps(999)
     assert app._max_inference_steps == runtime_cap
+
+
+def test_adjust_brush_thickness_caps_at_config_max(app):
+    app.canvas.set_brush_thickness(app.cfg.ui.max_brush_thickness)
+    app._adjust_brush_thickness(1)
+    assert app.canvas.brush_thickness == app.cfg.ui.max_brush_thickness
+
+
+def test_adjust_brush_thickness_caps_at_config_min(app):
+    app.canvas.set_brush_thickness(app.cfg.ui.min_brush_thickness)
+    app._adjust_brush_thickness(-1)
+    assert app.canvas.brush_thickness == app.cfg.ui.min_brush_thickness
 
 
 # -- trigger_exit unblocks events -------------------------------------------

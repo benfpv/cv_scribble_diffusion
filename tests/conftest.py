@@ -41,6 +41,7 @@ class MockPipeline:
     def __init__(self, cfg):
         self.cfg = cfg
         self._taesd = DummyTAESD()
+        self.prompts = []
 
     @property
     def taesd(self):
@@ -53,6 +54,7 @@ class MockPipeline:
     def run_inpaint(self, init_image, mask_image, control_image,
                     prompt, num_inference_steps, width, height,
                     step_callback=None):
+        self.prompts.append(prompt)
         for i in range(num_inference_steps):
             if step_callback:
                 latents = torch.rand(1, 3, height // 8, width // 8)
@@ -122,5 +124,7 @@ def slow_pipeline_cls():
 def patch_cv_window(monkeypatch):
     """No-op the OpenCV window calls so App() can be constructed headlessly."""
     monkeypatch.setattr("cv2.namedWindow", lambda *a, **kw: None)
+    monkeypatch.setattr("cv2.imshow", lambda *a, **kw: None)
+    monkeypatch.setattr("cv2.waitKeyEx", lambda *a, **kw: -1)
     monkeypatch.setattr("cv2.moveWindow", lambda *a, **kw: None)
     monkeypatch.setattr("cv2.setMouseCallback", lambda *a, **kw: None)

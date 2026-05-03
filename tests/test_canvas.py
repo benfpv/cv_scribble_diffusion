@@ -3,12 +3,16 @@
 import numpy as np
 import pytest
 
-from config import AppConfig
+from config import AppConfig, UIConfig
 from canvas import Canvas
 
 
 def make_canvas() -> Canvas:
     return Canvas(AppConfig())
+
+
+def make_canvas_with_ui(ui_cfg: UIConfig) -> Canvas:
+    return Canvas(AppConfig(ui=ui_cfg))
 
 
 # -- initial state -----------------------------------------------------------
@@ -67,6 +71,32 @@ def test_end_stroke_clears_mask_active():
     c.begin_stroke(100, 100)
     c.end_stroke(100, 100)
     assert np.all(c.mask_active == 0)
+
+
+def test_end_stroke_commits_click_point_before_clearing_active_mask():
+    c = make_canvas()
+    c.set_brush_thickness(10)
+
+    c.begin_stroke(100, 100)
+    active_pixels = np.count_nonzero(c.mask_active)
+    c.end_stroke(100, 100)
+
+    assert active_pixels > 1
+    assert np.count_nonzero(c.mask) == active_pixels
+    assert np.all(c.mask_active == 0)
+
+
+def test_end_stroke_commits_latest_uncommitted_segment():
+    c = make_canvas()
+    c.set_brush_thickness(10)
+    c.begin_stroke(40, 40)
+    c.commit_active_to_mask()
+    mask_after_initial_point = c.mask.copy()
+
+    c.continue_stroke(90, 40)
+    c.end_stroke(90, 40)
+
+    assert np.count_nonzero(c.mask) > np.count_nonzero(mask_after_initial_point)
 
 
 def test_continue_stroke_only_draws_when_drawing():
@@ -185,6 +215,17 @@ def test_set_brush_thickness_clamps_to_max():
     assert c.brush_thickness == c.cfg.ui.max_brush_thickness
 
 
+def test_initial_brush_thickness_clamps_to_configured_max():
+    c = make_canvas_with_ui(UIConfig(brush_thickness=99, max_brush_thickness=12))
+    assert c.brush_thickness == 12
+
+
+def test_set_brush_thickness_uses_configured_min():
+    c = make_canvas_with_ui(UIConfig(min_brush_thickness=4, brush_thickness=4))
+    c.set_brush_thickness(-10)
+    assert c.brush_thickness == 4
+
+
 def test_set_brush_thickness_clamps_to_min():
     c = make_canvas()
     c.set_brush_thickness(0)
@@ -198,16 +239,30 @@ def test_set_brush_thickness_updates_stroke_thickness():
     assert c.brush_stroke_thickness == 14
 
 
-def test_set_brush_thickness_updates_point_thickness():
+def test_set_brush_thickness_updates_point_radius_from_effective_stroke_width():
     c = make_canvas()
     c.set_brush_thickness(9)
-    assert c.brush_point_thickness == 4
+    assert c.brush_stroke_thickness == 12
+    assert c.brush_point_radius == 6
 
 
 def test_set_brush_thickness_one_has_single_pixel_start_radius():
     c = make_canvas()
     c.set_brush_thickness(1)
-    assert c.brush_point_thickness == 0
+    assert c.brush_point_radius == 0
+
+
+def test_click_point_size_scales_with_effective_stroke_width():
+    c = make_canvas()
+    c.set_brush_thickness(10)
+
+    c.begin_stroke(100, 100)
+    ys, xs = np.nonzero(c.mask_active)
+    width = xs.max() - xs.min() + 1
+    height = ys.max() - ys.min() + 1
+
+    assert width >= c.brush_stroke_thickness
+    assert height >= c.brush_stroke_thickness
 
 
 # -- snapshot / restore edge cases -------------------------------------------

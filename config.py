@@ -27,11 +27,21 @@ class InferenceConfig:
     crop_min_dim: int = 64
     min_inference_steps: int = 2
     max_inference_steps: int = 18
+    max_runtime_inference_steps: int = 86
     rate_inference_steps_change: int = 2
     image_sizes_ramp: Tuple[Tuple[int, int], ...] = (
         (240, 240), (280, 280), (320, 320), (360, 360),
         (400, 400), (440, 440), (480, 480), (512, 512),
     )
+
+    @property
+    def runtime_step_cap(self) -> int:
+        """Highest max-step value reachable through runtime controls."""
+        return max(
+            self.min_inference_steps,
+            self.max_inference_steps,
+            self.max_runtime_inference_steps,
+        )
 
 
 @dataclass
@@ -72,12 +82,17 @@ class UIConfig:
     title_rail_width: int = 32
     brush_thickness: int = 2
     brush_stroke_multiplier: float = 1.4
+    min_brush_thickness: int = 1
     max_brush_thickness: int = 20
     show_toolbar: bool = True
-    toolbar_height: int = 28
+    toolbar_height: int = 40
     progress_bar_height: int = 6
     canvas_margin: int = 12
     status_bar_height: int = 16
+    show_prompt_box: bool = True
+    prompt_box_height: int = 32
+    prompt_box_gap: int = 8
+    prompt_max_chars: int = 160
     display_fps_options: Tuple[int, ...] = (
         15, 24, 30, 60, 75, 90, 100, 120, 144, 165, 180, 200, 240,
     )
@@ -85,10 +100,27 @@ class UIConfig:
     interp_fps: int = 30
     image_store_limit_count: int = 9
     window_name: str = ""
+    borderless_window: bool = True
 
     def __post_init__(self):
         if not self.window_name:
             self.window_name = self.app_title
+
+    def brush_stroke_thickness_for(self, brush_thickness: int) -> int:
+        """Effective OpenCV line thickness for a configured brush size."""
+        return max(1, int(brush_thickness * self.brush_stroke_multiplier))
+
+    def clamp_brush_thickness(self, brush_thickness: int) -> int:
+        """Clamp a requested brush size to configured runtime bounds."""
+        lower = max(1, self.min_brush_thickness)
+        upper = max(lower, self.max_brush_thickness)
+        return max(lower, min(upper, brush_thickness))
+
+    def brush_point_radius_for(self, brush_thickness: int) -> int:
+        """Effective OpenCV point radius for a configured brush size."""
+        if brush_thickness <= 0:
+            return 0
+        return max(0, self.brush_stroke_thickness_for(brush_thickness) // 2)
 
     @property
     def display_scale(self) -> Tuple[float, float]:
@@ -104,8 +136,11 @@ class UIConfig:
         rail = max(0, self.title_rail_width) if self.show_title_rail else 0
         tb = self.toolbar_height if self.show_toolbar else 0
         footer = self.progress_bar_height + self.status_bar_height
+        prompt_footer = 0
+        if self.show_prompt_box:
+            prompt_footer = self.prompt_box_gap + self.prompt_box_height
         w = rail + self.canvas_margin * 2 + self.present_size[0]
-        h = tb + self.canvas_margin + self.present_size[1] + self.canvas_margin + footer
+        h = tb + self.canvas_margin + self.present_size[1] + self.canvas_margin + footer + prompt_footer
         return (w, h)
 
 

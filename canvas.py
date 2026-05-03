@@ -27,7 +27,7 @@ class Canvas:
         self._init_buffers()
 
         # Brush derived values
-        self.brush_thickness = cfg.ui.brush_thickness
+        self.brush_thickness = cfg.ui.clamp_brush_thickness(cfg.ui.brush_thickness)
         self._update_brush_geometry()
 
         # Drawing state
@@ -87,7 +87,7 @@ class Canvas:
         self.drawing = True
         self.has_active_strokes = True
         self._last_committed_active.fill(0)
-        cv2.circle(self.mask_active, (x, y), self.brush_point_thickness, 150, -1)
+        cv2.circle(self.mask_active, (x, y), self.brush_point_radius, 150, -1)
         self.prev_x = x
         self.prev_y = y
 
@@ -101,6 +101,7 @@ class Canvas:
 
     def end_stroke(self, x: int, y: int):
         x, y = self._clamp_coords(x, y)
+        self.commit_active_to_mask()
         self.drawing = False
         self.has_active_strokes = False
         self.prev_x = x
@@ -126,18 +127,15 @@ class Canvas:
         return False
 
     def set_brush_thickness(self, thickness: int):
-        self.brush_thickness = max(1, min(self.cfg.ui.max_brush_thickness, thickness))
+        self.brush_thickness = self.cfg.ui.clamp_brush_thickness(thickness)
         self._update_brush_geometry()
 
     def _update_brush_geometry(self):
         """Keep brush point and stroke widths in sync with the user-selected size."""
-        # OpenCV circle uses radius for the first point. Radius 0 gives a
-        # single-pixel dot, which matches thickness=1 expectations.
-        self.brush_point_thickness = max(0, int((self.brush_thickness - 1) / 2))
-        self.brush_stroke_thickness = max(
-            1,
-            int(self.brush_thickness * self.cfg.ui.brush_stroke_multiplier),
+        self.brush_stroke_thickness = self.cfg.ui.brush_stroke_thickness_for(
+            self.brush_thickness,
         )
+        self.brush_point_radius = self.cfg.ui.brush_point_radius_for(self.brush_thickness)
 
     # -- image patching -------------------------------------------------------
 

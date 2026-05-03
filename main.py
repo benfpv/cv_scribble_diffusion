@@ -13,16 +13,16 @@ TAESD (madebyollin/taesd) is downloaded automatically on first run via HuggingFa
 import os
 os.environ['TF_ENABLE_ONEDNN_OPTS'] = '0'
 
+import sys
 import numpy as np
 import time
 import cv2
-import ctypes
 import threading
 import enum
 from collections import deque
 from dataclasses import dataclass
 
-from typing import Optional
+from typing import Optional, Tuple
 
 from config import AppConfig
 from pipeline import DiffusionPipeline
@@ -35,7 +35,8 @@ from generation import (
 )
 from runtime_logging import configure_logging, get_logger
 from colorspace import rgb_to_bgr
-from ui import UIOverlay, StatusInfo
+from ui import UIOverlay, StatusInfo, PromptInfo
+from windowing import create_app_window
 
 
 logger = get_logger(__name__)
@@ -54,6 +55,78 @@ class _DiffusionCancelled(Exception):
 
 
 _EXIT_CONFIRM_SECONDS = 2.5
+_CLOSING_NOTICE = "Closing safely..."
+
+
+class _StartupProgress:
+    """Small TTY-only progress indicator for slow model startup."""
+
+    def __init__(self, label: str, stream=None, interval_s: float = 0.12, width: int = 22):
+        self._label = label
+        self._stream = stream if stream is not None else sys.stdout
+        self._interval_s = interval_s
+        self._width = max(8, width)
+        self._stop = threading.Event()
+        self._thread: Optional[threading.Thread] = None
+        self._started_at = 0.0
+        self._tick = 0
+        self._last_len = 0
+
+    def __enter__(self):
+        self.start()
+        return self
+
+    def __exit__(self, exc_type, _exc, _tb):
+        self.stop(success=exc_type is None)
+        return False
+
+    @property
+    def enabled(self) -> bool:
+        isatty = getattr(self._stream, "isatty", None)
+        return bool(callable(isatty) and isatty())
+
+    def start(self):
+        if not self.enabled:
+            return
+        self._started_at = time.monotonic()
+        self._stop.clear()
+        self._draw()
+        self._thread = threading.Thread(target=self._run, name="startup-progress", daemon=True)
+        self._thread.start()
+
+    def stop(self, success: bool = True):
+        if not self.enabled:
+            return
+        self._stop.set()
+        if self._thread is not None:
+            self._thread.join(timeout=self._interval_s * 2)
+        elapsed = time.monotonic() - self._started_at
+        message = "Models and UI ready" if success else "Startup failed"
+        self._write(f"[Startup] {message} in {elapsed:0.1f}s")
+        self._stream.write("\n")
+        self._stream.flush()
+
+    def _run(self):
+        while not self._stop.wait(self._interval_s):
+            self._tick += 1
+            self._draw()
+
+    def _draw(self):
+        elapsed = max(0.0, time.monotonic() - self._started_at)
+        self._write(f"{self._label} {self._bar()} {elapsed:0.1f}s")
+
+    def _bar(self) -> str:
+        segment = max(3, self._width // 4)
+        cycle = self._width + segment
+        head = (self._tick % cycle) - segment
+        chars = ["=" if head <= i < head + segment else "." for i in range(self._width)]
+        return "[" + "".join(chars) + "]"
+
+    def _write(self, text: str):
+        padding = " " * max(0, self._last_len - len(text))
+        self._stream.write("\r" + text + padding)
+        self._stream.flush()
+        self._last_len = len(text)
 
 
 @dataclass
@@ -96,6 +169,13 @@ class App:
         self._thread_error: Optional[str] = None
         self._ui_notice: Optional[str] = None
         self._ui_notice_until: float = 0.0
+        self._prompt_lock = threading.Lock()
+        self._prompt_text = self._clean_prompt_text(cfg.inference.prompt)
+        self._prompt_draft = self._prompt_text
+        self._prompt_cursor = len(self._prompt_draft)
+        self._prompt_editing = False
+        self._prompt_selection_anchor: Optional[int] = None
+        self._prompt_dragging_selection = False
 
         # FPS pacing
         fps_opts = cfg.ui.display_fps_options
@@ -125,32 +205,14 @@ class App:
         self._reset_ack.set()
 
         # OpenCV window
-        cv2.namedWindow(cfg.ui.window_name)
-        self._center_window()
+        borderless_applied = create_app_window(
+            cfg.ui.window_name, cfg.ui.window_size, borderless=cfg.ui.borderless_window,
+        )
         cv2.setMouseCallback(cfg.ui.window_name, self.mouse_callback)
-        logger.info("OpenCV window ready: name=%s size=%s", cfg.ui.window_name, cfg.ui.window_size)
-
-    def _center_window(self):
-        """Center the OpenCV window on the primary screen.
-
-        Windows-only via ``ctypes.windll.user32``. On non-Windows platforms
-        the screen-size lookup raises and we fall through to placement at
-        ``(0, 0)``, which most window managers will then reposition.
-        """
-        ww, wh = self.cfg.ui.window_size
-        sw = ww
-        sh = wh
-        try:
-            user32 = ctypes.windll.user32
-            sw = int(user32.GetSystemMetrics(0))
-            sh = int(user32.GetSystemMetrics(1))
-        except Exception:
-            pass
-
-        x = max(0, (sw - ww) // 2)
-        y = max(0, (sh - wh) // 2)
-        cv2.moveWindow(self.cfg.ui.window_name, x, y)
-        logger.info("Centered window at (%s, %s) on screen %sx%s", x, y, sw, sh)
+        logger.info(
+            "OpenCV window ready: name=%s size=%s borderless=%s applied=%s",
+            cfg.ui.window_name, cfg.ui.window_size, cfg.ui.borderless_window, borderless_applied,
+        )
 
     # -- mouse / keyboard -----------------------------------------------------
 
@@ -162,6 +224,9 @@ class App:
         # cv2.waitKeyEx returns a platform-specific code. The low byte covers
         # ASCII/control keys across backends.
         low_byte = key_code & 0xFF
+
+        if self._prompt_editing and self._handle_prompt_keypress(key_code, low_byte):
+            return
 
         if low_byte == 27:  # Esc
             self._request_exit(source="Keyboard")
@@ -200,11 +265,253 @@ class App:
             self._adjust_brush_thickness(1)
             return
 
+    def _handle_prompt_keypress(self, key_code: int, low_byte: int) -> bool:
+        """Handle text editing keys while the prompt field is focused."""
+        if low_byte == 1:  # Ctrl+A
+            self._select_prompt_all()
+            return True
+        if low_byte == 27:  # Esc
+            self._cancel_prompt_edit()
+            return True
+        if low_byte in (13, 10):  # Enter
+            self._commit_prompt_edit()
+            return True
+        if low_byte == 8:  # Backspace
+            if self._delete_prompt_selection():
+                return True
+            if self._prompt_cursor > 0:
+                self._prompt_draft = (
+                    self._prompt_draft[:self._prompt_cursor - 1] +
+                    self._prompt_draft[self._prompt_cursor:]
+                )
+                self._prompt_cursor -= 1
+            return True
+        if low_byte == 127 or key_code == 3014656:  # Delete
+            if self._delete_prompt_selection():
+                return True
+            if self._prompt_cursor < len(self._prompt_draft):
+                self._prompt_draft = (
+                    self._prompt_draft[:self._prompt_cursor] +
+                    self._prompt_draft[self._prompt_cursor + 1:]
+                )
+            return True
+        if key_code == 2424832:  # Left arrow
+            selection = self._prompt_selection_bounds()
+            if selection is not None:
+                self._set_prompt_cursor(selection[0])
+            else:
+                self._set_prompt_cursor(self._prompt_cursor - 1)
+            return True
+        if key_code == 2555904:  # Right arrow
+            selection = self._prompt_selection_bounds()
+            if selection is not None:
+                self._set_prompt_cursor(selection[1])
+            else:
+                self._set_prompt_cursor(self._prompt_cursor + 1)
+            return True
+        if key_code == 2359296:  # Home
+            self._set_prompt_cursor(0)
+            return True
+        if key_code == 2293760:  # End
+            self._set_prompt_cursor(len(self._prompt_draft))
+            return True
+        if 32 <= low_byte <= 126:
+            self._insert_prompt_char(chr(low_byte))
+            return True
+        return True
+
+    def _insert_prompt_char(self, ch: str):
+        """Insert a printable prompt character at the current cursor."""
+        self._insert_prompt_text(ch)
+
+    def _insert_prompt_text(self, text: str):
+        """Insert printable prompt text, replacing the active selection if any."""
+        text = "".join(ch for ch in text if 32 <= ord(ch) <= 126)
+        if not text:
+            return
+        max_chars = self.cfg.ui.prompt_max_chars
+        selection = self._prompt_selection_bounds()
+        start, end = selection if selection is not None else (self._prompt_cursor, self._prompt_cursor)
+        available = max_chars - (len(self._prompt_draft) - (end - start))
+        if available <= 0:
+            self._set_ui_notice(f"Prompt limit reached ({max_chars} chars)")
+            return
+        insert_text = text[:available]
+        self._prompt_draft = (
+            self._prompt_draft[:start] + insert_text +
+            self._prompt_draft[end:]
+        )
+        self._prompt_cursor = start + len(insert_text)
+        self._clear_prompt_selection()
+        if len(insert_text) < len(text):
+            self._set_ui_notice(f"Prompt limit reached ({max_chars} chars)")
+
+    def _begin_prompt_edit(self, cursor: Optional[int] = None):
+        """Focus the prompt editor and place the cursor."""
+        if not self._prompt_editing:
+            with self._prompt_lock:
+                self._prompt_draft = self._prompt_text
+        self._set_prompt_cursor(len(self._prompt_draft) if cursor is None else cursor)
+        self._prompt_dragging_selection = False
+        self._prompt_editing = True
+        self._set_ui_notice("Editing prompt: Enter applies, Esc cancels", duration_s=4.0)
+
+    def _commit_prompt_edit(self):
+        """Commit the prompt draft so future generations use it."""
+        new_prompt = self._clean_prompt_text(self._prompt_draft)
+        with self._prompt_lock:
+            old_prompt = self._prompt_text
+            self._prompt_text = new_prompt
+        self._prompt_draft = new_prompt
+        self._prompt_cursor = len(new_prompt)
+        self._prompt_editing = False
+        self._clear_prompt_selection()
+        self._prompt_dragging_selection = False
+
+        if new_prompt != old_prompt:
+            self._inference_steps = self.cfg.inference.min_inference_steps
+            self.image_size_index = 0
+            if np.any(self.canvas.mask) and self._gen_state == GenState.IDLE:
+                self._gen_state = GenState.READY
+            self._announce("Prompt updated", source="Prompt")
+            self._set_ui_notice(f"Prompt updated ({len(new_prompt)}/{self.cfg.ui.prompt_max_chars})")
+
+    def _cancel_prompt_edit(self):
+        """Discard prompt edits and return to the committed prompt."""
+        with self._prompt_lock:
+            self._prompt_draft = self._prompt_text
+        self._prompt_cursor = len(self._prompt_draft)
+        self._prompt_editing = False
+        self._clear_prompt_selection()
+        self._prompt_dragging_selection = False
+        self._set_ui_notice("Prompt edit cancelled")
+
+    def _clean_prompt_text(self, text: str) -> str:
+        """Keep prompt text single-line, printable ASCII, and within the configured limit."""
+        text = text.replace("\r", " ").replace("\n", " ")
+        cleaned = "".join(ch for ch in text if 32 <= ord(ch) <= 126)
+        return cleaned[:self.cfg.ui.prompt_max_chars]
+
+    def _clamp_prompt_cursor(self, cursor: int) -> int:
+        """Clamp a cursor index to the current draft bounds."""
+        return max(0, min(cursor, len(self._prompt_draft)))
+
+    def _set_prompt_cursor(self, cursor: int, selecting: bool = False):
+        """Move the prompt cursor, optionally extending selection from an anchor."""
+        cursor = self._clamp_prompt_cursor(cursor)
+        if selecting:
+            if self._prompt_selection_anchor is None:
+                self._prompt_selection_anchor = self._prompt_cursor
+        else:
+            self._clear_prompt_selection()
+        self._prompt_cursor = cursor
+
+    def _prompt_selection_bounds(self) -> Optional[Tuple[int, int]]:
+        """Return active prompt selection as (start, end), or None."""
+        if self._prompt_selection_anchor is None:
+            return None
+        anchor = self._clamp_prompt_cursor(self._prompt_selection_anchor)
+        cursor = self._clamp_prompt_cursor(self._prompt_cursor)
+        if anchor == cursor:
+            return None
+        return (min(anchor, cursor), max(anchor, cursor))
+
+    def _clear_prompt_selection(self):
+        """Clear any active prompt selection."""
+        self._prompt_selection_anchor = None
+
+    def _delete_prompt_selection(self) -> bool:
+        """Delete the selected prompt text if a selection is active."""
+        selection = self._prompt_selection_bounds()
+        if selection is None:
+            return False
+        start, end = selection
+        self._prompt_draft = self._prompt_draft[:start] + self._prompt_draft[end:]
+        self._prompt_cursor = start
+        self._clear_prompt_selection()
+        return True
+
+    def _select_prompt_all(self):
+        """Select the complete prompt draft for replacement or deletion."""
+        self._prompt_cursor = len(self._prompt_draft)
+        self._prompt_selection_anchor = 0 if self._prompt_draft else None
+
+    def _prompt_cursor_from_x(self, x: int) -> int:
+        """Translate a window x coordinate to a cursor index for the prompt draft."""
+        return self.ui.prompt_cursor_index(
+            self._prompt_draft, x, self._prompt_cursor, self.cfg.ui.prompt_max_chars,
+        )
+
+    def _update_prompt_selection_from_x(self, x: int):
+        """Extend the prompt selection to the cursor location under *x*."""
+        self._set_prompt_cursor(self._prompt_cursor_from_x(x), selecting=True)
+
+    def _finish_prompt_selection_drag(self, x: int):
+        """End mouse-based prompt selection, clearing empty selections."""
+        self._update_prompt_selection_from_x(x)
+        self._prompt_dragging_selection = False
+        if self._prompt_selection_bounds() is None:
+            self._clear_prompt_selection()
+
+    def _generation_prompt(self) -> str:
+        """Return the committed prompt for a generation cycle."""
+        with self._prompt_lock:
+            return self._prompt_text
+
+    def _prompt_info(self) -> Optional[PromptInfo]:
+        """Build prompt editor state for UI rendering."""
+        if not self.cfg.ui.show_prompt_box:
+            return None
+        if self._prompt_editing:
+            text = self._prompt_draft
+            cursor = self._prompt_cursor
+        else:
+            with self._prompt_lock:
+                text = self._prompt_text
+            cursor = len(text)
+        cursor_visible = self._prompt_editing and int(time.time() * 2) % 2 == 0
+        selection = self._prompt_selection_bounds() if self._prompt_editing else None
+        return PromptInfo(
+            text=text,
+            editing=self._prompt_editing,
+            cursor=cursor,
+            cursor_visible=cursor_visible,
+            max_chars=self.cfg.ui.prompt_max_chars,
+            selection_start=selection[0] if selection is not None else 0,
+            selection_end=selection[1] if selection is not None else 0,
+        )
+
     def mouse_callback(self, event, x, y, flags, param):
         """OpenCV mouse callback: toolbar hits and canvas strokes."""
         cfg = self.cfg
         canvas = self.canvas
+        if event == cv2.EVENT_LBUTTONDBLCLK:
+            if self.ui.prompt_hit_test(x, y):
+                self._clear_exit_confirmation()
+                self._begin_prompt_edit(self._prompt_cursor_from_x(x) if self._prompt_editing else None)
+                self._select_prompt_all()
+                self._prompt_dragging_selection = False
+                return
+
         if event == cv2.EVENT_LBUTTONDOWN:
+            if self.ui.prompt_hit_test(x, y):
+                self._clear_exit_confirmation()
+                if self._prompt_editing:
+                    text = self._prompt_draft
+                    cursor = self._prompt_cursor
+                else:
+                    with self._prompt_lock:
+                        text = self._prompt_text
+                    cursor = len(text)
+                cursor = self.ui.prompt_cursor_index(text, x, cursor, cfg.ui.prompt_max_chars)
+                self._begin_prompt_edit(cursor)
+                self._prompt_selection_anchor = self._prompt_cursor
+                self._prompt_dragging_selection = True
+                return
+
+            if self._prompt_editing:
+                self._commit_prompt_edit()
+
             action = self.ui.hit_test(x, y)
             if action == "exit":
                 self._request_exit(source="Toolbar")
@@ -252,6 +559,9 @@ class App:
                 if self._gen_state == GenState.IDLE:
                     self._gen_state = GenState.READY
         elif event == cv2.EVENT_MOUSEMOVE:
+            if self._prompt_dragging_selection:
+                self._update_prompt_selection_from_x(x)
+                return
             if canvas.drawing:
                 coords = self.ui.canvas_coords(x, y)
                 if coords is not None:
@@ -260,10 +570,12 @@ class App:
                     if self._gen_state == GenState.IDLE:
                         self._gen_state = GenState.READY
                 else:
-                    # If the drag leaves the canvas, commit what we've drawn and terminate.
-                    canvas.commit_active_to_mask()
+                    # If the drag leaves the canvas, preserve the stroke and terminate it.
                     canvas.end_stroke(canvas.prev_x, canvas.prev_y)
         elif event == cv2.EVENT_LBUTTONUP:
+            if self._prompt_dragging_selection:
+                self._finish_prompt_selection_drag(x)
+                return
             coords = self.ui.canvas_coords(x, y)
             if coords is not None:
                 canvas.end_stroke(*coords)
@@ -294,6 +606,7 @@ class App:
         """Signal the application to exit."""
         self.exit_triggered = True
         self._stop_event.set()
+        self._set_ui_notice(_CLOSING_NOTICE, duration_s=10.0)
         # Unblock any thread waiting on these events so it can observe stop.
         self._reset_ack.set()
         self._gen_done.set()
@@ -311,7 +624,7 @@ class App:
             self._clear_exit_confirmation()
 
         if self._exit_confirm_stage >= 1:
-            self._announce("Exiting", source=source)
+            self._announce(_CLOSING_NOTICE, source=source)
             self._clear_exit_confirmation()
             self.trigger_exit()
             return
@@ -398,10 +711,72 @@ class App:
             return 0.0
         return max(0.0, min(progress, 1.0))
 
+    def _compose_window_frame(self, display_frame: np.ndarray,
+                              canvas_notice: Optional[str] = None) -> np.ndarray:
+        """Build a complete UI frame for normal display or shutdown notice."""
+        cfg = self.cfg
+        icfg = cfg.inference
+
+        is_generating = self._gen_state == GenState.GENERATING
+        if time.time() > self._exit_confirm_until:
+            self._clear_exit_confirmation()
+        exit_armed = self._exit_confirm_stage > 0
+        exit_active = exit_armed or self.exit_triggered
+        button_states = {
+            "exit": exit_active,
+            "reset": self._gen_state == GenState.RESETTING,
+            "save": False,
+            "mask": self.mask_visibility_toggle,
+            "undo": False,
+            "brush_dec": False,
+            "brush_inc": False,
+            "steps_dec": False,
+            "steps_inc": False,
+            "fps": False,
+        }
+        button_labels = {
+            "exit": "QUIT?" if exit_active else "EXIT",
+            "undo": "UNDO",
+            "steps_dec": "MAX-",
+            "steps_inc": "MAX+",
+            "fps": "FPS",
+            "brush_dec": "THIN",
+            "brush_inc": "THICK",
+        }
+        status = StatusInfo(
+            quality=self.current_inference_steps if (is_generating or self._gen_count > 0) else 0,
+            quality_min=icfg.min_inference_steps,
+            quality_max=self._max_inference_steps,
+            gen_count=self._gen_count,
+            display_fps=self._display_fps,
+            brush_thickness=self.canvas.brush_thickness,
+            ui_notice=self._current_ui_notice(),
+            thread_error=self._thread_error,
+        )
+        return self.ui.compose_frame(
+            display_frame,
+            self.canvas.mask_active,
+            self.canvas.mask_present,
+            self.mask_visibility_toggle,
+            self.canvas.has_active_strokes,
+            self._ui_generation_progress(),
+            button_states,
+            button_labels,
+            status=status,
+            prompt=self._prompt_info(),
+            canvas_notice=canvas_notice,
+        )
+
+    def _show_closing_frame(self, display_frame: np.ndarray):
+        """Publish one final visible frame before shutdown cleanup can block."""
+        frame = self._compose_window_frame(display_frame, canvas_notice=_CLOSING_NOTICE)
+        cv2.imshow(self.cfg.ui.window_name, frame)
+        cv2.waitKeyEx(1)
+
     def _adjust_max_inference_steps(self, delta: int):
         """Adjust the runtime max number of diffusion steps."""
         icfg = self.cfg.inference
-        runtime_cap = max(icfg.max_inference_steps, 30)
+        runtime_cap = icfg.runtime_step_cap
         new_max = max(icfg.min_inference_steps, min(self._max_inference_steps + delta, runtime_cap))
         if new_max == self._max_inference_steps:
             return
@@ -542,10 +917,11 @@ class App:
                     self.dbg.save("full_control", inpaint.control_image)
                     self.dbg.save("full_mask", inpaint.inpaint_mask)
 
+                prompt = self._generation_prompt()
                 gen_start_time = time.time()
                 result = self.pipe.run_inpaint(
                     inpaint.init_image, inpaint.inpaint_mask, inpaint.control_image,
-                    icfg.prompt, inference_steps,
+                    prompt, inference_steps,
                     width=inpaint.width, height=inpaint.height,
                     step_callback=step_cb,
                 )
@@ -651,59 +1027,14 @@ class App:
                 self._reset_ack.set()
 
             display_frame = self.animator.get_display_frame()
-
-            is_generating = self._gen_state == GenState.GENERATING
-            if time.time() > self._exit_confirm_until:
-                self._clear_exit_confirmation()
-            exit_armed = self._exit_confirm_stage > 0
-            button_states = {
-                "exit": exit_armed,
-                "reset": self._gen_state == GenState.RESETTING,
-                "save": False,
-                "mask": self.mask_visibility_toggle,
-                "undo": False,
-                "brush_dec": False,
-                "brush_inc": False,
-                "steps_dec": False,
-                "steps_inc": False,
-                "fps": False,
-            }
-            button_labels = {
-                "exit": "QUIT?" if exit_armed else "EXIT",
-                "undo": "UNDO",
-                "steps_dec": "MAX-",
-                "steps_inc": "MAX+",
-                "fps": "FPS",
-                "brush_dec": "THIN",
-                "brush_inc": "THICK",
-            }
-            status = StatusInfo(
-                quality=self.current_inference_steps if (is_generating or self._gen_count > 0) else 0,
-                quality_min=icfg.min_inference_steps,
-                quality_max=self._max_inference_steps,
-                gen_count=self._gen_count,
-                display_fps=self._display_fps,
-                brush_thickness=self.canvas.brush_thickness,
-                ui_notice=self._current_ui_notice(),
-                thread_error=self._thread_error,
-            )
-            window_frame = self.ui.compose_frame(
-                display_frame,
-                self.canvas.mask_active,
-                self.canvas.mask_present,
-                self.mask_visibility_toggle,
-                self.canvas.has_active_strokes,
-                self._ui_generation_progress(),
-                button_states,
-                button_labels,
-                status=status,
-            )
+            window_frame = self._compose_window_frame(display_frame)
 
             cv2.imshow(ucfg.window_name, window_frame)
             key_code = cv2.waitKeyEx(1)
             self._handle_keypress(key_code)
 
             if self.exit_triggered:
+                self._show_closing_frame(display_frame)
                 break
             time.sleep(1.0 / self._display_fps)
 
@@ -719,9 +1050,10 @@ class App:
 
 
 if __name__ == "__main__":
-    print("...[Startup] Launching cv_scribble_diffusion (loading models and UI)...")
+    print("...[Startup] Launching cv_scribble_diffusion (loading models and UI)...", flush=True)
     try:
-        app = App()
+        with _StartupProgress("[Startup] Loading models and UI"):
+            app = App()
         app.run()
     except Exception:
         logger.exception("Fatal unhandled exception in main thread")
