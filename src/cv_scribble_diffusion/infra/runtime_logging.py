@@ -44,6 +44,20 @@ def configure_logging(cfg: LoggingConfig):
     _CONFIGURED = True
 
 
+def reset_logging():
+    """Reset logging configuration so it can be re-applied.
+
+    Intended for test isolation: clears the one-time guard and removes the
+    handlers this module attached to the root logger.
+    """
+    global _CONFIGURED
+    root = logging.getLogger()
+    for handler in list(root.handlers):
+        root.removeHandler(handler)
+        handler.close()
+    _CONFIGURED = False
+
+
 def get_logger(name: str) -> logging.Logger:
     """Get a module logger."""
     return logging.getLogger(name)

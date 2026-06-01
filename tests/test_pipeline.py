@@ -122,6 +122,43 @@ def test_pipeline_init_cpu_path(monkeypatch):
     assert str(pipe.taesd_device) == "cpu"
 
 
+def test_pipeline_disables_safety_checker_by_default(monkeypatch):
+    _patch_backends(monkeypatch)
+    monkeypatch.setattr("torch.cuda.is_available", lambda: False)
+
+    pipe = pipeline_module.DiffusionPipeline(_cfg(use_gpu=False))
+
+    assert pipe._pipe.safety_checker is None
+
+
+def test_pipeline_keeps_safety_checker_when_enabled(monkeypatch):
+    _patch_backends(monkeypatch)
+    monkeypatch.setattr("torch.cuda.is_available", lambda: False)
+    cfg = AppConfig(
+        model=ModelConfig(
+            pipe_path="pipe",
+            scribble_path="scribble",
+            taesd_id="taesd",
+            use_gpu=False,
+            enable_safety_checker=True,
+        ),
+        inference=InferenceConfig(),
+    )
+
+    pipe = pipeline_module.DiffusionPipeline(cfg)
+
+    assert pipe._pipe.safety_checker == "enabled"
+
+
+def test_pipeline_resolves_precision_to_torch_dtype(monkeypatch):
+    _patch_backends(monkeypatch)
+    monkeypatch.setattr("torch.cuda.is_available", lambda: False)
+
+    pipeline_module.DiffusionPipeline(_cfg(use_gpu=False))
+
+    assert FakeControlNetModel.last_call[1] is torch.float16
+
+
 def test_pipeline_init_gpu_path_enables_offload_and_moves_taesd(monkeypatch):
     _patch_backends(monkeypatch)
     monkeypatch.setattr("torch.cuda.is_available", lambda: True)

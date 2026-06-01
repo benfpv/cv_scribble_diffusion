@@ -13,6 +13,7 @@ import numpy as np
 from PIL import Image
 
 from cv_scribble_diffusion.utils.colorspace import gray_to_rgb
+from cv_scribble_diffusion.utils.geometry import present_bounds as _present_bounds
 from cv_scribble_diffusion.config import InferenceConfig, UIConfig
 
 
@@ -86,9 +87,7 @@ def make_control_image(mask_gray: np.ndarray) -> Image.Image:
 
 def present_bounds(region: CropRegion, ui: UIConfig) -> PresentBounds:
     """Map an image-space crop to present-space pixel bounds."""
-    cx1, cy1, cx2, cy2 = region
-    sx, sy = ui.display_scale
-    return int(cx1 * sx), int(cy1 * sy), int(cx2 * sx), int(cy2 * sy)
+    return _present_bounds(region, ui.display_scale)
 
 
 @dataclass(frozen=True)

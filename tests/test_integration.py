@@ -85,9 +85,9 @@ def _prompt_point(app, x=12, y=12):
 
 
 def _replace_prompt(app, text):
-    app._begin_prompt_edit(0)
-    app._prompt_draft = ""
-    app._prompt_cursor = 0
+    app.prompt.begin_edit(0)
+    app.prompt.draft = ""
+    app.prompt.cursor = 0
     for ch in text:
         app._handle_keypress(ord(ch))
     app._handle_keypress(13)
@@ -288,119 +288,119 @@ def test_exit_confirmation_stage_resets_after_timeout(app, monkeypatch):
 def test_prompt_box_click_focuses_editor(app):
     x, y = _prompt_point(app)
     app.mouse_callback(cv2.EVENT_LBUTTONDOWN, x, y, 0, None)
-    assert app._prompt_editing is True
+    assert app.prompt.editing is True
 
 
 def test_prompt_enter_commits_keyboard_text(app):
     _replace_prompt(app, "neon city")
-    assert app._generation_prompt() == "neon city"
-    assert app._prompt_editing is False
+    assert app.prompt.committed() == "neon city"
+    assert app.prompt.editing is False
 
 
 def test_prompt_escape_cancels_without_arming_exit(app):
-    original_prompt = app._generation_prompt()
-    app._begin_prompt_edit(0)
-    app._insert_prompt_char("x")
+    original_prompt = app.prompt.committed()
+    app.prompt.begin_edit(0)
+    app.prompt.insert_char("x")
 
     app._handle_keypress(27)
 
-    assert app._generation_prompt() == original_prompt
-    assert app._prompt_editing is False
+    assert app.prompt.committed() == original_prompt
+    assert app.prompt.editing is False
     assert app.exit_triggered is False
     assert app._exit_confirm_stage == 0
 
 
 def test_prompt_input_is_capped_at_configured_max(app):
     max_chars = app.cfg.ui.prompt_max_chars
-    app._begin_prompt_edit(0)
-    app._prompt_draft = ""
-    app._prompt_cursor = 0
+    app.prompt.begin_edit(0)
+    app.prompt.draft = ""
+    app.prompt.cursor = 0
 
     for _ in range(max_chars + 5):
         app._handle_keypress(ord("x"))
 
-    assert len(app._prompt_draft) == max_chars
-    assert app._prompt_cursor == max_chars
+    assert len(app.prompt.draft) == max_chars
+    assert app.prompt.cursor == max_chars
 
 
 def test_prompt_editing_supports_cursor_backspace_and_delete(app):
     _replace_prompt(app, "abcd")
-    app._begin_prompt_edit(2)
+    app.prompt.begin_edit(2)
 
     app._handle_keypress(8)  # Backspace removes b
-    assert app._prompt_draft == "acd"
-    assert app._prompt_cursor == 1
+    assert app.prompt.draft == "acd"
+    assert app.prompt.cursor == 1
 
     app._handle_keypress(2555904)  # Right arrow to c|d
     app._handle_keypress(3014656)  # Delete removes d
-    assert app._prompt_draft == "ac"
-    assert app._prompt_cursor == 2
+    assert app.prompt.draft == "ac"
+    assert app.prompt.cursor == 2
 
 
 def test_prompt_cleaning_removes_newlines_and_non_ascii(app):
     dirty = "line one\nline two caf\u00e9"
-    cleaned = app._clean_prompt_text(dirty)
+    cleaned = app.prompt.clean_text(dirty)
     assert cleaned == "line one line two caf"
 
 
 def test_prompt_home_end_keys_move_cursor(app):
     _replace_prompt(app, "abcdef")
-    app._begin_prompt_edit(3)
+    app.prompt.begin_edit(3)
 
     app._handle_keypress(2359296)  # Home
-    assert app._prompt_cursor == 0
+    assert app.prompt.cursor == 0
 
     app._handle_keypress(2293760)  # End
-    assert app._prompt_cursor == len(app._prompt_draft)
+    assert app.prompt.cursor == len(app.prompt.draft)
 
 
 def test_prompt_ctrl_a_selects_all_and_typing_replaces(app):
     _replace_prompt(app, "neon city")
-    app._begin_prompt_edit(0)
+    app.prompt.begin_edit(0)
 
     app._handle_keypress(1)  # Ctrl+A
-    assert app._prompt_selection_bounds() == (0, len("neon city"))
+    assert app.prompt.selection_bounds() == (0, len("neon city"))
 
     app._handle_keypress(ord("x"))
-    assert app._prompt_draft == "x"
-    assert app._prompt_cursor == 1
-    assert app._prompt_selection_bounds() is None
+    assert app.prompt.draft == "x"
+    assert app.prompt.cursor == 1
+    assert app.prompt.selection_bounds() is None
 
 
 def test_prompt_selected_text_can_be_deleted_with_backspace_or_delete(app):
     _replace_prompt(app, "abcdef")
-    app._begin_prompt_edit(0)
-    app._prompt_cursor = 4
-    app._prompt_selection_anchor = 1
+    app.prompt.begin_edit(0)
+    app.prompt.cursor = 4
+    app.prompt.selection_anchor = 1
 
     app._handle_keypress(8)
-    assert app._prompt_draft == "aef"
-    assert app._prompt_cursor == 1
-    assert app._prompt_selection_bounds() is None
+    assert app.prompt.draft == "aef"
+    assert app.prompt.cursor == 1
+    assert app.prompt.selection_bounds() is None
 
-    app._prompt_cursor = 3
-    app._prompt_selection_anchor = 1
+    app.prompt.cursor = 3
+    app.prompt.selection_anchor = 1
     app._handle_keypress(3014656)  # Delete
-    assert app._prompt_draft == "a"
-    assert app._prompt_cursor == 1
-    assert app._prompt_selection_bounds() is None
+    assert app.prompt.draft == "a"
+    assert app.prompt.cursor == 1
+    assert app.prompt.selection_bounds() is None
 
 
 def test_prompt_arrow_keys_collapse_selection(app):
     _replace_prompt(app, "abcdef")
-    app._begin_prompt_edit(0)
-    app._prompt_cursor = 5
-    app._prompt_selection_anchor = 2
+    app.prompt.begin_edit(0)
+    app.prompt.cursor = 5
+    app.prompt.selection_anchor = 2
 
     app._handle_keypress(2424832)  # Left arrow
-    assert app._prompt_cursor == 2
-    assert app._prompt_selection_bounds() is None
+    assert app.prompt.cursor == 2
+    assert app.prompt.selection_bounds() is None
 
-    app._prompt_cursor = 1
-    app._prompt_selection_anchor = 4
+    app.prompt.cursor = 1
+    app.prompt.selection_anchor = 4
     app._handle_keypress(2555904)  # Right arrow
-    assert app._prompt_cursor == 4
-    assert app._prompt_selection_bounds() is None
+    assert app.prompt.cursor == 4
+    assert app.prompt.selection_bounds() is None
 
 
 def test_prompt_double_click_selects_all(app):
@@ -409,8 +409,8 @@ def test_prompt_double_click_selects_all(app):
 
     app.mouse_callback(cv2.EVENT_LBUTTONDBLCLK, x, y, 0, None)
 
-    assert app._prompt_editing is True
-    assert app._prompt_selection_bounds() == (0, len("blue lake"))
+    assert app.prompt.editing is True
+    assert app.prompt.selection_bounds() == (0, len("blue lake"))
 
 
 def test_prompt_mouse_drag_selects_and_replaces_text(app, monkeypatch):
@@ -426,53 +426,53 @@ def test_prompt_mouse_drag_selects_and_replaces_text(app, monkeypatch):
     app.mouse_callback(cv2.EVENT_MOUSEMOVE, 100, y, 0, None)
     app.mouse_callback(cv2.EVENT_LBUTTONUP, 100, y, 0, None)
 
-    assert app._prompt_selection_bounds() == (0, len("crystal forest"))
+    assert app.prompt.selection_bounds() == (0, len("crystal forest"))
 
     for ch in "mist":
         app._handle_keypress(ord(ch))
-    assert app._prompt_draft == "mist"
-    assert app._prompt_selection_bounds() is None
+    assert app.prompt.draft == "mist"
+    assert app.prompt.selection_bounds() is None
 
 
 def test_prompt_replacing_selection_can_edit_at_character_limit(app):
     max_chars = app.cfg.ui.prompt_max_chars
-    app._begin_prompt_edit(0)
-    app._prompt_draft = "x" * max_chars
-    app._prompt_cursor = max_chars
-    app._prompt_selection_anchor = max_chars - 1
+    app.prompt.begin_edit(0)
+    app.prompt.draft = "x" * max_chars
+    app.prompt.cursor = max_chars
+    app.prompt.selection_anchor = max_chars - 1
 
     app._handle_keypress(ord("y"))
 
-    assert len(app._prompt_draft) == max_chars
-    assert app._prompt_draft.endswith("y")
-    assert app._prompt_cursor == max_chars
-    assert app._prompt_selection_bounds() is None
+    assert len(app.prompt.draft) == max_chars
+    assert app.prompt.draft.endswith("y")
+    assert app.prompt.cursor == max_chars
+    assert app.prompt.selection_bounds() is None
 
 
 def test_prompt_clicking_canvas_commits_and_starts_drawing(app):
-    app._begin_prompt_edit(0)
-    app._prompt_draft = "blue lake"
-    app._prompt_cursor = len(app._prompt_draft)
+    app.prompt.begin_edit(0)
+    app.prompt.draft = "blue lake"
+    app.prompt.cursor = len(app.prompt.draft)
     x, y = _canvas_point(app)
 
     app.mouse_callback(cv2.EVENT_LBUTTONDOWN, x, y, 0, None)
 
-    assert app._generation_prompt() == "blue lake"
-    assert app._prompt_editing is False
+    assert app.prompt.committed() == "blue lake"
+    assert app.prompt.editing is False
     assert app.canvas.drawing is True
 
 
 def test_prompt_selection_does_not_block_next_canvas_stroke(app):
     _replace_prompt(app, "blue lake")
-    app._begin_prompt_edit(0)
-    app._select_prompt_all()
+    app.prompt.begin_edit(0)
+    app.prompt.select_all()
     x, y = _canvas_point(app)
 
     app.mouse_callback(cv2.EVENT_LBUTTONDOWN, x, y, 0, None)
 
-    assert app._generation_prompt() == "blue lake"
-    assert app._prompt_editing is False
-    assert app._prompt_selection_bounds() is None
+    assert app.prompt.committed() == "blue lake"
+    assert app.prompt.editing is False
+    assert app.prompt.selection_bounds() is None
     assert app.canvas.drawing is True
 
 
@@ -487,6 +487,7 @@ def test_prompt_commit_marks_existing_mask_ready(app):
     assert app._inference_steps == app.cfg.inference.min_inference_steps
 
 
+@pytest.mark.threaded
 def test_generation_uses_committed_runtime_prompt(app):
     _replace_prompt(app, "crystal forest")
     app.canvas.mask[20:30, 20:30] = 150
@@ -560,6 +561,7 @@ def test_reset_clears_thread_error(app):
 
 # -- thread error handling ---------------------------------------------------
 
+@pytest.mark.threaded
 def test_thread_error_recorded_on_pipeline_failure(failing_app):
     """When the pipeline raises, _thread_error is populated and state recovers."""
     app = failing_app
@@ -574,6 +576,7 @@ def test_thread_error_recorded_on_pipeline_failure(failing_app):
     assert app._gen_state == GenState.READY
 
 
+@pytest.mark.threaded
 def test_thread_error_persists_across_successful_generations(app):
     """Thread errors are sticky: only reset/undo clears them so transient
     failures stay visible to the user across subsequent successful runs."""
@@ -595,6 +598,7 @@ def test_thread_error_cleared_by_reset(app):
 
 # -- full generation cycle ---------------------------------------------------
 
+@pytest.mark.threaded
 def test_generation_produces_nonzero_frame(app):
     """A full generation cycle produces a visible display frame."""
     app.canvas.mask[20:40, 20:40] = 150
@@ -609,6 +613,7 @@ def test_generation_produces_nonzero_frame(app):
     assert frame.mean() > 10
 
 
+@pytest.mark.threaded
 def test_inference_steps_ramp_after_generation(app):
     """After generation, inference steps increase by the configured rate."""
     app.canvas.mask[20:40, 20:40] = 150
@@ -624,6 +629,7 @@ def test_inference_steps_ramp_after_generation(app):
     assert app._inference_steps == expected
 
 
+@pytest.mark.threaded
 def test_generation_ramp_respects_runtime_max_steps(app):
     app.canvas.mask[20:40, 20:40] = 150
     app._gen_state = GenState.READY
@@ -646,6 +652,7 @@ def test_canvas_clamps_out_of_bounds_coords(app):
     assert app.canvas.drawing is False
 
 
+@pytest.mark.threaded
 def test_reset_during_generation_does_not_commit_stale_result(monkeypatch, patch_cv_window, slow_pipeline_cls):
     """Resetting mid-generation should keep the reset canvas, not stale output."""
     monkeypatch.setattr("cv_scribble_diffusion.app.app.DiffusionPipeline", slow_pipeline_cls)
@@ -686,6 +693,7 @@ def test_reset_during_generation_does_not_commit_stale_result(monkeypatch, patch
 
 # -- backoff and consecutive failures ----------------------------------------
 
+@pytest.mark.threaded
 def test_consecutive_failure_increments_and_records_error(
     monkeypatch, patch_cv_window, always_failing_pipeline_cls,
 ):
@@ -712,6 +720,7 @@ def test_consecutive_failure_increments_and_records_error(
     assert "Persistent simulated failure" in app._thread_error
 
 
+@pytest.mark.threaded
 def test_consecutive_failure_triggers_ui_notice_after_threshold(
     monkeypatch, patch_cv_window, always_failing_pipeline_cls,
 ):
@@ -866,6 +875,7 @@ def test_undo_clears_thread_error(app):
 
 # -- _DiffusionCancelled during generation -----------------------------------
 
+@pytest.mark.threaded
 def test_stop_event_during_pipeline_cancels_cleanly(
     monkeypatch, patch_cv_window, mock_pipeline_cls,
 ):

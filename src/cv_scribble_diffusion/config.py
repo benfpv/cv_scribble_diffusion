@@ -1,6 +1,6 @@
 """Centralised application configuration."""
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Tuple
 
 
@@ -11,6 +11,17 @@ class ModelConfig:
     scribble_path: str = "sd-controlnet-scribble"
     taesd_id: str = "madebyollin/taesd"
     use_gpu: bool = True
+    precision: str = "float16"
+    enable_safety_checker: bool = False
+
+    @property
+    def torch_dtype(self):
+        """Resolve the configured precision name to a ``torch.dtype``."""
+        import torch
+        dtype = getattr(torch, self.precision, None)
+        if not isinstance(dtype, torch.dtype):
+            raise ValueError(f"Unsupported model precision: {self.precision!r}")
+        return dtype
 
 
 @dataclass
@@ -166,23 +177,9 @@ class LoggingConfig:
 @dataclass
 class AppConfig:
     """Top-level configuration composed of grouped sub-configs."""
-    model: ModelConfig = None      # type: ignore[assignment]
-    inference: InferenceConfig = None  # type: ignore[assignment]
-    reveal: RevealConfig = None    # type: ignore[assignment]
-    ui: UIConfig = None            # type: ignore[assignment]
-    debug: DebugConfig = None      # type: ignore[assignment]
-    logging: LoggingConfig = None  # type: ignore[assignment]
-
-    def __post_init__(self):
-        if self.model is None:
-            self.model = ModelConfig()
-        if self.inference is None:
-            self.inference = InferenceConfig()
-        if self.reveal is None:
-            self.reveal = RevealConfig()
-        if self.ui is None:
-            self.ui = UIConfig()
-        if self.debug is None:
-            self.debug = DebugConfig()
-        if self.logging is None:
-            self.logging = LoggingConfig()
+    model: ModelConfig = field(default_factory=ModelConfig)
+    inference: InferenceConfig = field(default_factory=InferenceConfig)
+    reveal: RevealConfig = field(default_factory=RevealConfig)
+    ui: UIConfig = field(default_factory=UIConfig)
+    debug: DebugConfig = field(default_factory=DebugConfig)
+    logging: LoggingConfig = field(default_factory=LoggingConfig)

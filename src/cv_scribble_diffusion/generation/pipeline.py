@@ -36,22 +36,24 @@ class DiffusionPipeline:
         logger.info("Use GPU: %s", self._use_gpu)
 
         # ControlNet
+        dtype = cfg.model.torch_dtype
         controlnet = ControlNetModel.from_pretrained(
-            cfg.model.scribble_path, torch_dtype=torch.float16
+            cfg.model.scribble_path, torch_dtype=dtype
         )
 
         # SD inpainting pipeline
         self._pipe = StableDiffusionControlNetInpaintPipeline.from_pretrained(
-            cfg.model.pipe_path, controlnet=controlnet, torch_dtype=torch.float16
+            cfg.model.pipe_path, controlnet=controlnet, torch_dtype=dtype
         )
         if self._use_gpu:
             self._pipe.enable_sequential_cpu_offload()
 
-        # The bundled SD safety checker is disabled for this local-use creative
-        # tool: latency matters and false positives during interactive scribble
-        # sessions interrupt the experience. Reinstate it before any deployment
-        # to a public-facing surface.
-        self._pipe.safety_checker = None
+        # The bundled SD safety checker is disabled by default for this
+        # local-use creative tool: latency matters and false positives during
+        # interactive scribble sessions interrupt the experience. Set
+        # ``model.enable_safety_checker`` to keep it for public-facing use.
+        if not cfg.model.enable_safety_checker:
+            self._pipe.safety_checker = None
         self._pipe.scheduler = UniPCMultistepScheduler.from_config(
             self._pipe.scheduler.config
         )
@@ -60,7 +62,7 @@ class DiffusionPipeline:
 
         # TAESD for fast preview decoding (~10× faster than full VAE)
         self._taesd = AutoencoderTiny.from_pretrained(
-            cfg.model.taesd_id, torch_dtype=torch.float16
+            cfg.model.taesd_id, torch_dtype=dtype
         )
         if self._use_gpu:
             self._taesd.to("cuda")

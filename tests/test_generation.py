@@ -1,4 +1,4 @@
-"""Tests for the pure helpers in generation.py."""
+"""Tests for the pure helpers in generation/inputs.py and generation/reveal.py."""
 
 import numpy as np
 import pytest

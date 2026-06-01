@@ -45,6 +45,7 @@ def test_undo_with_empty_history_is_noop(app):
     assert np.array_equal(before, app.canvas.mask)
 
 
+@pytest.mark.threaded
 def test_undo_during_generation_restores_after_reset(monkeypatch, patch_cv_window, slow_pipeline_cls):
     monkeypatch.setattr("cv_scribble_diffusion.app.app.DiffusionPipeline", slow_pipeline_cls)
     app = App(_make_cfg())

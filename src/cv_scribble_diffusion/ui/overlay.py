@@ -1,7 +1,7 @@
 """Toolbar, progress bar, status bar, and compositing for the OpenCV window.
 
-The UIOverlay owns all layout math and rendering; main.py delegates hit-testing
-and final frame composition to it.
+The UIOverlay owns all layout math and rendering; the App in app/app.py
+delegates hit-testing and final frame composition to it.
 """
 
 from dataclasses import dataclass
